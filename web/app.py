@@ -800,6 +800,25 @@ async def api_download_status():
     return _download_state
 
 
+def _load_download_items(source: str, identifiers: list[str]) -> list[dict]:
+    """读取任意数量的下载项；分批查询仅为避开 SQLite 参数数量上限。"""
+    if source == "author":
+        requested = [int(value) for value in identifiers]
+        sql = "SELECT id, video_id, title, video_url FROM videos WHERE id IN ({placeholders})"
+    else:
+        requested = identifiers
+        sql = "SELECT video_id, title, video_url FROM topic_results WHERE video_id IN ({placeholders})"
+
+    rows = []
+    # SQLite 常见参数上限为 999；500 只是数据库查询批次，不是下载上限。
+    with get_db() as db:
+        for start in range(0, len(requested), 500):
+            batch = requested[start:start + 500]
+            placeholders = ",".join("?" for _ in batch)
+            rows.extend(db.execute(sql.format(placeholders=placeholders), batch).fetchall())
+    return [dict(row) for row in rows if row["video_url"]]
+
+
 @app.post("/api/downloads/start")
 async def api_start_downloads(payload: dict = Body(...)):
     """一次选目录后，后台依次下载勾选的视频，支持作者与话题两类结果。"""
@@ -812,24 +831,10 @@ async def api_start_downloads(payload: dict = Body(...)):
     identifiers = list(dict.fromkeys(str(value) for value in raw_ids if str(value).strip()))
     if not identifiers:
         return JSONResponse({"error": "请先勾选要下载的作品"}, 400)
-    if len(identifiers) > 200:
-        return JSONResponse({"error": "一次最多下载 200 条作品"}, 400)
-    placeholders = ",".join("?" for _ in identifiers)
-    with get_db() as db:
-        if source == "author":
-            try:
-                numeric_ids = [int(value) for value in identifiers]
-            except ValueError:
-                return JSONResponse({"error": "作者作品标识无效"}, 400)
-            placeholders = ",".join("?" for _ in numeric_ids)
-            rows = db.execute(
-                f"SELECT id, video_id, title, video_url FROM videos WHERE id IN ({placeholders})", numeric_ids
-            ).fetchall()
-        else:
-            rows = db.execute(
-                f"SELECT video_id, title, video_url FROM topic_results WHERE video_id IN ({placeholders})", identifiers
-            ).fetchall()
-    items = [dict(row) for row in rows if row["video_url"]]
+    try:
+        items = _load_download_items(source, identifiers)
+    except ValueError:
+        return JSONResponse({"error": "作者作品标识无效"}, 400)
     if not items:
         return JSONResponse({"error": "勾选作品暂无可访问的视频地址，请重新提取后再试"}, 400)
     try:
