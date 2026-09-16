@@ -1,0 +1,123 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>博主管理</h1>
+
+<div class="add-form">
+    <input type="text" id="add-url" placeholder="抖音博主 URL 或 sec_uid">
+    <input type="text" id="add-name" placeholder="名称（可选）" style="max-width:180px">
+    <button class="btn btn-primary" onclick="addCreator()">添加博主</button>
+</div>
+
+<details style="margin:14px 0;max-width:700px">
+    <summary style="cursor:pointer">批量导入作者主页</summary>
+    <p style="color:var(--text-secondary);font-size:13px">每行一个主页链接；也可写成“名称 + Tab + 链接”。</p>
+    <textarea id="batch-urls" rows="6" placeholder="https://www.douyin.com/user/xxx&#10;作者B&#9;https://v.douyin.com/xxx/" style="width:100%;box-sizing:border-box"></textarea>
+    <button class="btn btn-primary" style="margin-top:8px" onclick="batchAddCreators()">批量导入</button>
+</details>
+
+<table class="table">
+    <thead>
+        <tr><th>ID</th><th>名称</th><th>平台</th><th>最后抓取</th><th>操作</th></tr>
+    </thead>
+    <tbody>
+    {% for c in creators %}
+        <tr>
+            <td>{{ c.id }}</td>
+            <td>
+                <span class="creator-name" id="name-{{ c.id }}" ondblclick="editName({{ c.id }})" title="双击改名">{{ c.name }}</span>
+                <input type="text" id="input-{{ c.id }}" value="{{ c.name }}" style="display:none;width:140px"
+                       onkeydown="if(event.key==='Enter')saveName({{ c.id }})"
+                       onblur="saveName({{ c.id }})">
+            </td>
+            <td>{{ c.platform }}</td>
+            <td>{{ c.last_fetched_at or '从未' }}</td>
+            <td>
+                <button class="btn btn-outline btn-sm" onclick="fetchOne({{ c.id }})">抓取</button>
+                <button class="btn btn-danger btn-sm" onclick="removeCreator({{ c.id }})">删除</button>
+            </td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+
+{% if not creators %}
+<div class="empty-state">
+    <p>还没有添加博主</p>
+    <p>在上方输入抖音博主 URL 开始监控</p>
+</div>
+{% endif %}
+
+<script>
+async function addCreator() {
+    const url = document.getElementById('add-url').value.trim();
+    const name = document.getElementById('add-name').value.trim();
+    if (!url) return alert('请输入 URL 或 sec_uid');
+    const res = await fetch('/api/creators/add', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sec_uid: url, name: name })
+    });
+    if (!res.ok) {
+        const err = await res.json();
+        return alert(err.error || '添加失败');
+    }
+    location.reload();
+}
+async function batchAddCreators() {
+    const urls = document.getElementById('batch-urls').value.trim();
+    if (!urls) return alert('请粘贴主页链接');
+    const res = await fetch('/api/creators/batch', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ urls })
+    });
+    const data = await res.json();
+    if (!res.ok) return alert(data.error || '导入失败');
+    const failed = data.failed || [];
+    alert(`已导入 ${data.added.length} 个作者` + (failed.length ? `；失败 ${failed.length} 个：\n` + failed.map(x => x.input + ' - ' + x.error).join('\n') : ''));
+    if (data.added.length) location.reload();
+}
+async function removeCreator(id) {
+    if (!confirm('确定删除此博主？')) return;
+    await fetch(`/api/creators/${id}`, { method: 'DELETE' });
+    location.reload();
+}
+async function fetchOne(id) {
+    try {
+        const res = await fetch(`/api/run?creator_id=${id}`, { method: 'POST' });
+        const data = await res.json();
+        if (!res.ok) {
+            return alert(data.error || data.message || '抓取失败');
+        }
+        alert(data.message + ' (' + data.total + ' 条视频入库)');
+        location.reload();
+    } catch(e) {
+        alert('请求失败: ' + e.message);
+    }
+}
+async function editName(id) {
+    document.getElementById('name-' + id).style.display = 'none';
+    const inp = document.getElementById('input-' + id);
+    inp.style.display = 'inline-block';
+    inp.focus();
+    inp.select();
+}
+async function saveName(id) {
+    const inp = document.getElementById('input-' + id);
+    const newName = inp.value.trim();
+    inp.style.display = 'none';
+    document.getElementById('name-' + id).style.display = 'inline';
+    if (!newName || newName === document.getElementById('name-' + id).textContent) return;
+    const res = await fetch('/api/creators/' + id, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newName })
+    });
+    if (res.ok) {
+        document.getElementById('name-' + id).textContent = newName;
+    } else {
+        const err = await res.json();
+        alert(err.error || '改名失败');
+    }
+}
+</script>
+{% endblock %}
