@@ -237,6 +237,21 @@ def clear_extraction_results() -> int:
         return int(count)
 
 
+def clear_creator_list() -> dict[str, int]:
+    """清空作者主页列表及其关联的作品结果，不影响话题提取结果。"""
+    with get_db() as db:
+        creator_count = int(db.execute("SELECT COUNT(*) AS count FROM creators").fetchone()["count"])
+        video_count = int(db.execute("SELECT COUNT(*) AS count FROM videos").fetchone()["count"])
+        # 外键未配置级联删除，按依赖从子表往上删除，避免留下无主数据。
+        db.execute("DELETE FROM transcripts")
+        db.execute("DELETE FROM comments")
+        db.execute("DELETE FROM snapshots")
+        db.execute("DELETE FROM videos")
+        db.execute("DELETE FROM creators")
+        db.commit()
+        return {"creators": creator_count, "videos": video_count}
+
+
 # ─── Topic extraction ────────────────────────────────────────
 
 def clear_topic_results() -> int:

@@ -25,7 +25,7 @@ from db import (
     upsert_video, add_snapshot, update_last_fetched, update_creator_profile, get_stats, get_db,
     get_all_stats, get_batch_transcripts, get_today_videos, get_today_summary,
     ingest_crawl_results, clear_extraction_results, upsert_comment, list_comments, get_comment_count,
-    delete_absent_comments, clear_topic_results, upsert_topic_result, list_topic_results,
+    delete_absent_comments, clear_creator_list, clear_topic_results, upsert_topic_result, list_topic_results,
 )
 from spider import DouyinSpider, SESSION_DIR
 from topic_spider import DouyinTopicSpider, normalise_topic_input
@@ -422,6 +422,12 @@ async def api_add_creators_batch(payload: dict = Body(...)):
 @app.get("/api/creators")
 async def api_list_creators():
     return {"creators": list_creators()}
+
+
+@app.delete("/api/creators")
+async def api_clear_creator_list():
+    """清空作者主页列表和作者作品结果；话题提取结果保留。"""
+    return clear_creator_list()
 
 
 @app.post("/api/creators/add-profile")
