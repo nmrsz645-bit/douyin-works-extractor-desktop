@@ -1,7 +1,9 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$Root,
-    [string]$ManifestUrl = "https://github.com/nmrsz645-bit/douyin-works-extractor-desktop/releases/latest/download/latest.json"
+    # Alibaba Cloud OSS is the primary domestic endpoint. GitHub remains a
+    # fallback below for users outside mainland networks or during OSS outages.
+    [string]$ManifestUrl = "https://luotuoqiluotuozhaoma-download.oss-cn-beijing.aliyuncs.com/updates/latest.json"
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,6 +12,10 @@ if ([string]::IsNullOrWhiteSpace($Root)) { throw "Update root folder is empty" }
 $Root = [IO.Path]::GetFullPath($Root)
 $AppDir = Join-Path $Root "app"
 
+# Some Windows PowerShell installations negotiate legacy TLS by default.
+# GitHub requires modern TLS for its release endpoints.
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
 function Get-AppVersion([string]$VersionFile) {
     if (-not (Test-Path -LiteralPath $VersionFile)) { return [version]"0.0.0" }
     try {
@@ -17,6 +23,55 @@ function Get-AppVersion([string]$VersionFile) {
         return [version]([string]$value).TrimStart("v")
     } catch {
         return [version]"0.0.0"
+    }
+}
+
+function Invoke-UpdateJson([string]$Url, [int]$MaxSeconds = 8) {
+    # curl.exe handles redirects and transient network failures more reliably on
+    # many Windows desktops. Keep the PowerShell request as a fallback.
+    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if ($null -ne $curl) {
+        $raw = & $curl.Source -L --silent --show-error --connect-timeout 5 --max-time $MaxSeconds --retry 1 --retry-delay 1 $Url 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            $text = $raw -join "`n"
+            if (-not [string]::IsNullOrWhiteSpace($text)) {
+                return $text | ConvertFrom-Json
+            }
+        }
+        Write-Output "curl update request failed (exit code $LASTEXITCODE); trying fallback."
+    }
+    return Invoke-RestMethod -Uri $Url -TimeoutSec $MaxSeconds -Headers @{ "User-Agent" = "DouyinWorksExtractorUpdater" }
+}
+
+function Get-LatestManifest([string]$PrimaryUrl) {
+    $primaryError = ""
+    try {
+        $manifest = Invoke-UpdateJson -Url $PrimaryUrl
+        if ([string]::IsNullOrWhiteSpace($manifest.version) -or [string]::IsNullOrWhiteSpace($manifest.url) -or [string]::IsNullOrWhiteSpace($manifest.sha256)) {
+            throw "Primary update manifest is incomplete"
+        }
+        return $manifest
+    }
+    catch {
+        $primaryError = $_.Exception.Message
+        Write-Output "Primary update request failed: $primaryError"
+    }
+
+    try {
+        $release = Invoke-UpdateJson -Url "https://api.github.com/repos/nmrsz645-bit/douyin-works-extractor-desktop/releases/latest"
+        $asset = @($release.assets | Where-Object { $_.name -eq "app.zip" }) | Select-Object -First 1
+        $digest = [string]$asset.digest
+        if ($null -eq $asset -or [string]::IsNullOrWhiteSpace($release.tag_name) -or -not $digest.StartsWith("sha256:")) {
+            throw "GitHub release metadata is incomplete"
+        }
+        return [pscustomobject]@{
+            version = [string]$release.tag_name
+            url = [string]$asset.browser_download_url
+            sha256 = $digest.Substring(7)
+        }
+    }
+    catch {
+        throw "Update check timed out or failed. Primary: $primaryError. Fallback: $($_.Exception.Message)"
     }
 }
 
@@ -60,7 +115,7 @@ function Confirm-Update([version]$CurrentVersion, [version]$NewVersion) {
 
 try {
     $localVersion = Get-AppVersion (Join-Path $AppDir "version.json")
-    $manifest = Invoke-RestMethod -Uri $ManifestUrl -TimeoutSec 12
+    $manifest = Get-LatestManifest -PrimaryUrl $ManifestUrl
     $remoteVersion = [version]([string]$manifest.version).TrimStart("v")
     if ($remoteVersion -le $localVersion -or [string]::IsNullOrWhiteSpace($manifest.url) -or [string]::IsNullOrWhiteSpace($manifest.sha256)) {
         Write-Output "No update available (installed: $localVersion)."
