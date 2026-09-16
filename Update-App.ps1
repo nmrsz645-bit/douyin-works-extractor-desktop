@@ -18,6 +18,25 @@ function Get-AppVersion([string]$VersionFile) {
     }
 }
 
+function Download-UpdatePackage([string]$Url, [string]$Destination) {
+    Write-Output "Downloading update package..."
+
+    # BITS is more tolerant of slow or temporarily interrupted connections than
+    # Invoke-WebRequest, and is available on normal Windows desktop systems.
+    try {
+        if (Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue) {
+            Start-BitsTransfer -Source $Url -Destination $Destination -DisplayName "Douyin Works Extractor update" -ErrorAction Stop
+            return
+        }
+    }
+    catch {
+        Write-Output "BITS download unavailable; falling back to direct download."
+    }
+
+    # Keep a generous fallback limit for machines where the BITS service is disabled.
+    Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing -TimeoutSec 1800
+}
+
 try {
     $localVersion = Get-AppVersion (Join-Path $AppDir "version.json")
     $manifest = Invoke-RestMethod -Uri $ManifestUrl -TimeoutSec 12
@@ -33,7 +52,7 @@ try {
     Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction SilentlyContinue
-    Invoke-WebRequest -Uri $manifest.url -OutFile $zip -UseBasicParsing -TimeoutSec 180
+    Download-UpdatePackage -Url $manifest.url -Destination $zip
     $actualHash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
     if ($actualHash -ne ([string]$manifest.sha256).ToLowerInvariant()) { throw "Update package verification failed" }
     Expand-Archive -LiteralPath $zip -DestinationPath $staging -Force
