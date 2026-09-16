@@ -78,19 +78,23 @@ function Get-LatestManifest([string]$PrimaryUrl) {
 function Download-UpdatePackage([string]$Url, [string]$Destination) {
     Write-Output "Downloading update package..."
 
-    # BITS is more tolerant of slow or temporarily interrupted connections than
-    # Invoke-WebRequest, and is available on normal Windows desktop systems.
-    try {
-        if (Get-Command Start-BitsTransfer -ErrorAction SilentlyContinue) {
-            Start-BitsTransfer -Source $Url -Destination $Destination -DisplayName "Douyin Works Extractor update" -ErrorAction Stop
+    # Do not use Start-BitsTransfer here.  On some computers the BITS service
+    # can remain at "Connecting" indefinitely, which blocks the launcher and
+    # never reaches the fallback. curl.exe has an explicit connection timeout
+    # and is bundled with supported Windows 10/11 releases.
+    $curl = Get-Command curl.exe -ErrorAction SilentlyContinue
+    if ($null -ne $curl) {
+        & $curl.Source -L --fail --silent --show-error --connect-timeout 12 --max-time 1800 --retry 2 --retry-delay 2 --output $Destination $Url
+        if ($LASTEXITCODE -eq 0 -and (Test-Path -LiteralPath $Destination) -and ((Get-Item -LiteralPath $Destination).Length -gt 0)) {
             return
         }
-    }
-    catch {
-        Write-Output "BITS download unavailable; falling back to direct download."
+        $curlExitCode = $LASTEXITCODE
+        Remove-Item -LiteralPath $Destination -Force -ErrorAction SilentlyContinue
+        Write-Output "Direct download failed (curl exit code $curlExitCode); trying PowerShell fallback."
     }
 
-    # Keep a generous fallback limit for machines where the BITS service is disabled.
+    # Keep a generous transfer allowance, but a failed connection must not
+    # leave a BITS job stuck in the user's system queue.
     Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing -TimeoutSec 1800
 }
 
