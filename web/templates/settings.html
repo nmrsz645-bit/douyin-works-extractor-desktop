@@ -9,6 +9,15 @@
 
 <form id="settings-form" style="display:flex;flex-direction:column;gap:24px;">
 
+  <fieldset style="border:1px solid var(--border);border-radius:8px;padding:16px;">
+    <legend style="font-weight:600;padding:0 8px;">🧹 抖音浏览器缓存</legend>
+    <p style="margin:0 0 12px;color:var(--text-secondary);font-size:13px;">仅清理本程序使用的抖音登录会话、网页缓存，不会删除作者列表、提取结果或系统 Chrome/Edge 数据。清理后需要重新扫码登录。</p>
+    <div style="display:flex;gap:8px;align-items:center;">
+      <button type="button" class="btn btn-outline" id="clear-browser-cache" onclick="clearBrowserCache()">一键清空浏览器缓存</button>
+      <span id="browser-cache-status" style="font-size:13px;color:var(--text-secondary);"></span>
+    </div>
+  </fieldset>
+
   <!-- 抓取设置 -->
   <fieldset style="border:1px solid var(--border);border-radius:8px;padding:16px;">
     <legend style="font-weight:600;padding:0 8px;">🕷️ 抓取配置</legend>
@@ -91,6 +100,26 @@
 </form>
 
 <script>
+async function clearBrowserCache() {
+  if (!confirm('确认清空本程序的抖音浏览器缓存吗？\n\n这会退出抖音登录；已提取的数据不会删除。')) return;
+  var btn = document.getElementById('clear-browser-cache');
+  var status = document.getElementById('browser-cache-status');
+  btn.disabled = true;
+  status.textContent = '正在清空…';
+  try {
+    var resp = await fetch('/api/browser-cache', { method: 'DELETE' });
+    var data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || '清空失败');
+    status.textContent = '✅ 已清空，请重新扫码登录';
+    showToast(data.message, 'success');
+  } catch (e) {
+    status.textContent = '❌ ' + e.message;
+    showToast(e.message, 'error');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
 document.getElementById('settings-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   var btn = document.getElementById('save-btn');

@@ -3,6 +3,7 @@ import asyncio
 import concurrent.futures
 import sys
 import logging
+import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -392,6 +393,21 @@ async def api_login():
 
     threading.Thread(target=_open_login_window, daemon=True).start()
     return {"message": "登录窗口已打开，请在抖音页面扫码登录"}
+
+
+@app.delete("/api/browser-cache")
+async def api_clear_browser_cache():
+    """只清理本程序 Playwright 会话；不影响系统浏览器和已提取的数据。"""
+    if _login_active or _extract_state["running"] or _topic_state["running"]:
+        return JSONResponse({"error": "请先完成或关闭当前登录/提取任务，再清空浏览器缓存"}, 409)
+    try:
+        if SESSION_DIR.exists():
+            shutil.rmtree(SESSION_DIR)
+        SESSION_DIR.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logger.exception("清空抖音浏览器缓存失败")
+        return JSONResponse({"error": f"清空浏览器缓存失败: {exc}"}, 500)
+    return {"message": "已清空本程序的抖音浏览器缓存和登录状态；下次提取前请重新扫码登录"}
 
 
 @app.post("/api/creators/batch")

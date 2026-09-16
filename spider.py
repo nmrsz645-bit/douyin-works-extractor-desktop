@@ -241,6 +241,28 @@ class DouyinSpider:
         await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
         await page.wait_for_timeout(random.randint(600, 1200))
 
+    async def _has_service_exception(self, page: Page) -> bool:
+        """识别抖音页面服务异常，避免继续空滑或频繁刷新。"""
+        try:
+            text = await page.locator("body").inner_text(timeout=1500)
+        except Exception:
+            return False
+        return "服务异常" in text and ("重新刷新" in text or "加载数据" in text)
+
+    async def _cool_down_if_needed(self, page: Page) -> bool:
+        if await self._has_service_exception(page):
+            self._error = (
+                f"抖音页面提示服务异常，已安全停止；本次已保留 {len(self.videos)} 条结果。"
+                "请等待 5 分钟后再重新提取，期间不要反复刷新页面。"
+            )
+            return True
+        # 每 12 次滚动主动暂停，降低长时间连续访问触发限制的概率。
+        if self._scroll_count and self._scroll_count % 12 == 0:
+            pause_ms = random.randint(7000, 12000)
+            logger.info("[主页限速] 已滚动 %d 次，暂停 %.1f 秒", self._scroll_count, pause_ms / 1000)
+            await page.wait_for_timeout(pause_ms)
+        return False
+
     async def fetch(self, sec_uid: str, max_retries: int = 3) -> list[Video]:
         """获取博主视频列表，支持自动重试（指数退避 + 抖动）。"""
         import time as _time
@@ -296,8 +318,12 @@ class DouyinSpider:
             for i in range(self.max_scrolls):
                 if self._stopped:
                     break
+                if await self._cool_down_if_needed(page):
+                    break
                 self._scroll_count += 1
                 await self._scroll_naturally(page)
+                if await self._cool_down_if_needed(page):
+                    break
                 idle = self._scroll_count - self._last_hit_scroll
                 if idle >= self.idle_limit:
                     break
