@@ -27,7 +27,7 @@ from db import (
     ingest_crawl_results, clear_extraction_results, upsert_comment, list_comments, get_comment_count,
     delete_absent_comments, clear_topic_results, upsert_topic_result, list_topic_results,
 )
-from spider import DouyinSpider
+from spider import DouyinSpider, SESSION_DIR
 from topic_spider import DouyinTopicSpider, normalise_topic_input
 from utils import resolve_secuid, async_resolve_secuid
 
@@ -64,16 +64,97 @@ def render(name: str, **ctx) -> HTMLResponse:
     return HTMLResponse(template.render(**ctx))
 
 
-def _read_creator_profile_once(sec_uid: str):
-    """在独立事件循环中读取一位作者资料，避免阻塞 Web 服务。"""
+def _profile_from_user(user: dict) -> dict:
+    """将抖音作者接口中的 user 字段转换为本程序保存的资料格式。"""
+    avatar_list = user.get("avatar_medium", {}).get("url_list") or user.get("avatar_thumb", {}).get("url_list") or []
+    return {
+        "nickname": str(user.get("nickname", "") or ""),
+        "avatar_url": avatar_list[0] if avatar_list else "",
+        "follower_count": int(user.get("follower_count", 0) or 0),
+        "following_count": int(user.get("following_count", 0) or 0),
+        "total_likes": int(user.get("total_favorited", 0) or 0),
+        "bio": str(user.get("signature", "") or ""),
+    }
+
+
+def _read_creator_profiles_visible(sec_uids: list[str]) -> dict[str, tuple[dict | None, str | None]]:
+    """用一个可见浏览器窗口依次读取多位作者资料，不滚动、不固定等待。"""
+    unique_sec_uids = list(dict.fromkeys(sec_uid for sec_uid in sec_uids if sec_uid))
+    if not unique_sec_uids:
+        return {}
     loop = asyncio.ProactorEventLoop() if sys.platform == "win32" else asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
+
+    async def _read_all():
+        from config_manager import load_config
+        from playwright.async_api import async_playwright
+
+        cfg = load_config()["spider"]
+        results: dict[str, tuple[dict | None, str | None]] = {}
+        SESSION_DIR.mkdir(parents=True, exist_ok=True)
+        async with async_playwright() as p:
+            # 资料读取和作品提取使用同一个可见、持久的登录会话。
+            context = await p.chromium.launch_persistent_context(
+                user_data_dir=str(SESSION_DIR),
+                headless=False,
+                viewport={"width": cfg["viewport_width"], "height": cfg["viewport_height"]},
+                user_agent=cfg["user_agent"],
+                locale=cfg["locale"],
+            )
+            page = context.pages[0] if context.pages else await context.new_page()
+            try:
+                for sec_uid in unique_sec_uids:
+                    profile: dict | None = None
+                    profile_ready = asyncio.Event()
+                    response_tasks: set[asyncio.Task] = set()
+
+                    async def _consume_profile(response):
+                        nonlocal profile
+                        if profile is not None or not any(pattern in response.url for pattern in DouyinSpider.PROFILE_PATTERNS):
+                            return
+                        try:
+                            data = await response.json()
+                            user = data.get("user", {})
+                            if str(user.get("sec_uid", "")) != sec_uid:
+                                return
+                            profile = _profile_from_user(user)
+                            profile_ready.set()
+                        except Exception:
+                            return
+
+                    def _on_response(response):
+                        task = asyncio.create_task(_consume_profile(response))
+                        response_tasks.add(task)
+                        task.add_done_callback(response_tasks.discard)
+
+                    page.on("response", _on_response)
+                    try:
+                        await page.goto(f"https://www.douyin.com/user/{sec_uid}", wait_until="domcontentloaded")
+                        # 只把 7 秒作为异常网络或验证页的上限；正常接口到达立即进入下一位。
+                        await asyncio.wait_for(profile_ready.wait(), timeout=7)
+                    except asyncio.TimeoutError:
+                        results[sec_uid] = (None, "未收到作者资料(请在弹出浏览器完成登录或验证后重试)")
+                    except Exception as exc:
+                        results[sec_uid] = (None, f"读取作者主页失败: {exc}")
+                    else:
+                        results[sec_uid] = (profile, None) if profile else (None, "未收到作者资料")
+                    finally:
+                        page.remove_listener("response", _on_response)
+                        if response_tasks:
+                            await asyncio.wait(response_tasks, timeout=1)
+            finally:
+                await context.close()
+        return results
+
     try:
-        spider = DouyinSpider(headless=True, max_scrolls=0, page_load_wait=5, idle_limit=1)
-        loop.run_until_complete(spider.fetch(sec_uid, max_retries=1))
-        return spider.profile.to_dict() if spider.profile else None, spider._error
+        return loop.run_until_complete(_read_all())
     finally:
         loop.close()
+
+
+def _read_creator_profile_once(sec_uid: str):
+    """兼容单位作者资料刷新接口。"""
+    return _read_creator_profiles_visible([sec_uid]).get(sec_uid, (None, "未收到作者资料"))
 
 
 def _freshness_level(last_fetched_at):
@@ -350,19 +431,7 @@ async def api_add_creator_profiles(payload: dict = Body(...)):
     lines = [line.strip() for line in raw_urls.splitlines() if line.strip()]
     if not lines:
         return JSONResponse({"error": "请粘贴至少一个作者主页链接"}, 400)
-    added, failed = [], []
-
-    def _read_profile(sec_uid: str):
-        loop = asyncio.ProactorEventLoop() if sys.platform == "win32" else asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            # 只加载主页首屏读取作者资料；不调用入库，因此不会把作品加入结果。
-            spider = DouyinSpider(headless=True, max_scrolls=0, page_load_wait=5, idle_limit=1)
-            loop.run_until_complete(spider.fetch(sec_uid, max_retries=1))
-            return spider.profile.to_dict() if spider.profile else None, spider._error
-        finally:
-            loop.close()
-
+    added, failed, pending = [], [], []
     for line in lines:
         parts = line.split("\t", 1)
         display_name = parts[0].strip() if len(parts) == 2 else ""
@@ -371,7 +440,13 @@ async def api_add_creator_profiles(payload: dict = Body(...)):
             failed.append({"input": line, "error": err})
             continue
         cid = add_creator(display_name or f"博主_{sec_uid[:8]}", sec_uid)
-        profile, read_error = await asyncio.get_running_loop().run_in_executor(None, _read_profile, sec_uid)
+        pending.append((cid, sec_uid, display_name, line))
+
+    profile_results = await asyncio.get_running_loop().run_in_executor(
+        None, _read_creator_profiles_visible, [item[1] for item in pending]
+    )
+    for cid, sec_uid, display_name, line in pending:
+        profile, read_error = profile_results.get(sec_uid, (None, "未收到作者资料"))
         if profile:
             update_creator_profile(cid, profile)
             if not display_name and profile.get("nickname"):
@@ -403,10 +478,11 @@ async def api_refresh_unread_profiles():
     """依次补读所有尚未获取资料的作者；失败项不会阻塞后续作者。"""
     unread = [creator for creator in list_creators() if not creator.get("nickname")]
     refreshed, failed = 0, []
+    profile_results = await asyncio.get_running_loop().run_in_executor(
+        None, _read_creator_profiles_visible, [creator["sec_uid"] for creator in unread]
+    )
     for creator in unread:
-        profile, read_error = await asyncio.get_running_loop().run_in_executor(
-            None, _read_creator_profile_once, creator["sec_uid"]
-        )
+        profile, read_error = profile_results.get(creator["sec_uid"], (None, "未收到作者资料"))
         if not profile:
             failed.append({"id": creator["id"], "name": creator["name"], "error": read_error or "未收到作者资料"})
             continue
