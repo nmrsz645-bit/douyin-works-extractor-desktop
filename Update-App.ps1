@@ -5,6 +5,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$Root = $Root.Trim().Trim('"')
+if ([string]::IsNullOrWhiteSpace($Root)) { throw "Update root folder is empty" }
 $Root = [IO.Path]::GetFullPath($Root)
 $AppDir = Join-Path $Root "app"
 
