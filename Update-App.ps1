@@ -18,22 +18,12 @@ function Get-AppVersion([string]$VersionFile) {
     }
 }
 
-function Start-Application {
-    $exe = Get-ChildItem -LiteralPath $AppDir -Filter "*.exe" -File -ErrorAction SilentlyContinue | Select-Object -First 1
-    if ($null -eq $exe) {
-        Add-Type -AssemblyName PresentationFramework
-        [System.Windows.MessageBox]::Show("Application files are incomplete. Please download the full package again.", "Douyin Works Extractor") | Out-Null
-        exit 1
-    }
-    Start-Process -FilePath $exe.FullName -WorkingDirectory $AppDir
-}
-
 try {
     $localVersion = Get-AppVersion (Join-Path $AppDir "version.json")
     $manifest = Invoke-RestMethod -Uri $ManifestUrl -TimeoutSec 12
     $remoteVersion = [version]([string]$manifest.version).TrimStart("v")
     if ($remoteVersion -le $localVersion -or [string]::IsNullOrWhiteSpace($manifest.url) -or [string]::IsNullOrWhiteSpace($manifest.sha256)) {
-        Start-Application
+        Write-Output "No update available (installed: $localVersion)."
         exit 0
     }
 
@@ -61,8 +51,9 @@ try {
     }
     Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Output "Updated application from $localVersion to $remoteVersion."
 } catch {
-    # When offline or an update fails, start the installed version instead.
+    # The CMD launcher starts the installed application after this script exits.
+    # Keep an actionable record instead of silently hiding update failures.
+    Write-Error "Update check failed: $($_.Exception.Message)"
 }
-
-Start-Application
