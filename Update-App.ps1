@@ -37,12 +37,35 @@ function Download-UpdatePackage([string]$Url, [string]$Destination) {
     Invoke-WebRequest -Uri $Url -OutFile $Destination -UseBasicParsing -TimeoutSec 1800
 }
 
+function Confirm-Update([version]$CurrentVersion, [version]$NewVersion) {
+    try {
+        Add-Type -AssemblyName PresentationFramework -ErrorAction Stop
+        $message = "A new version v$NewVersion is available (current: v$CurrentVersion).`n`nThe full update package is about 477 MB. Update now?"
+        $result = [System.Windows.MessageBox]::Show(
+            $message,
+            "Douyin Works Extractor - Update Available",
+            [System.Windows.MessageBoxButton]::YesNo,
+            [System.Windows.MessageBoxImage]::Information
+        )
+        return $result -eq [System.Windows.MessageBoxResult]::Yes
+    }
+    catch {
+        # A desktop Windows release normally has PresentationFramework. If it is
+        # unavailable, retain automatic update behavior instead of blocking launch.
+        return $true
+    }
+}
+
 try {
     $localVersion = Get-AppVersion (Join-Path $AppDir "version.json")
     $manifest = Invoke-RestMethod -Uri $ManifestUrl -TimeoutSec 12
     $remoteVersion = [version]([string]$manifest.version).TrimStart("v")
     if ($remoteVersion -le $localVersion -or [string]::IsNullOrWhiteSpace($manifest.url) -or [string]::IsNullOrWhiteSpace($manifest.sha256)) {
         Write-Output "No update available (installed: $localVersion)."
+        exit 0
+    }
+    if (-not (Confirm-Update -CurrentVersion $localVersion -NewVersion $remoteVersion)) {
+        Write-Output "Update skipped by user."
         exit 0
     }
 
