@@ -1,8 +1,7 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$Root,
-    # Alibaba Cloud OSS is the primary domestic endpoint. GitHub remains a
-    # fallback below for users outside mainland networks or during OSS outages.
+    # Alibaba Cloud OSS is the only production update endpoint.
     [string]$ManifestUrl = "https://luotuoqiluotuozhaoma-download.oss-cn-beijing.aliyuncs.com/updates/latest.json"
 )
 
@@ -26,6 +25,22 @@ function Get-AppVersion([string]$VersionFile) {
     }
 }
 
+function Get-Sha256([string]$Path) {
+    # Some managed Windows PowerShell installations load a restricted utility
+    # module, in which Get-FileHash is unexpectedly unavailable. Use the .NET
+    # implementation bundled with Windows instead, so the updater remains
+    # self-contained on those computers.
+    $stream = [IO.File]::OpenRead($Path)
+    $hasher = [Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = $hasher.ComputeHash($stream)
+        return (-join ($bytes | ForEach-Object { $_.ToString('x2') }))
+    } finally {
+        $hasher.Dispose()
+        $stream.Dispose()
+    }
+}
+
 function Invoke-UpdateJson([string]$Url, [int]$MaxSeconds = 8) {
     # curl.exe handles redirects and transient network failures more reliably on
     # many Windows desktops. Keep the PowerShell request as a fallback.
@@ -44,34 +59,15 @@ function Invoke-UpdateJson([string]$Url, [int]$MaxSeconds = 8) {
 }
 
 function Get-LatestManifest([string]$PrimaryUrl) {
-    $primaryError = ""
     try {
         $manifest = Invoke-UpdateJson -Url $PrimaryUrl
         if ([string]::IsNullOrWhiteSpace($manifest.version) -or [string]::IsNullOrWhiteSpace($manifest.url) -or [string]::IsNullOrWhiteSpace($manifest.sha256)) {
-            throw "Primary update manifest is incomplete"
+            throw "Domestic OSS update manifest is incomplete"
         }
         return $manifest
     }
     catch {
-        $primaryError = $_.Exception.Message
-        Write-Output "Primary update request failed: $primaryError"
-    }
-
-    try {
-        $release = Invoke-UpdateJson -Url "https://api.github.com/repos/nmrsz645-bit/douyin-works-extractor-desktop/releases/latest"
-        $asset = @($release.assets | Where-Object { $_.name -eq "app.zip" }) | Select-Object -First 1
-        $digest = [string]$asset.digest
-        if ($null -eq $asset -or [string]::IsNullOrWhiteSpace($release.tag_name) -or -not $digest.StartsWith("sha256:")) {
-            throw "GitHub release metadata is incomplete"
-        }
-        return [pscustomobject]@{
-            version = [string]$release.tag_name
-            url = [string]$asset.browser_download_url
-            sha256 = $digest.Substring(7)
-        }
-    }
-    catch {
-        throw "Update check timed out or failed. Primary: $primaryError. Fallback: $($_.Exception.Message)"
+        throw "Domestic OSS update check failed: $($_.Exception.Message)"
     }
 }
 
@@ -137,7 +133,7 @@ try {
     Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction SilentlyContinue
     Download-UpdatePackage -Url $manifest.url -Destination $zip
-    $actualHash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+    $actualHash = Get-Sha256 $zip
     if ($actualHash -ne ([string]$manifest.sha256).ToLowerInvariant()) { throw "Update package verification failed" }
     Expand-Archive -LiteralPath $zip -DestinationPath $staging -Force
     $newApp = Join-Path $staging "app"

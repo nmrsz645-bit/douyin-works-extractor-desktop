@@ -1,12 +1,9 @@
-name: Build Windows release
+name: Build domestic OSS release package
 
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
-
-permissions:
-  contents: write
 
 jobs:
   package:
@@ -41,10 +38,13 @@ jobs:
           $manifest = @{ version = $version; url = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/app.zip"; sha256 = $sha256 } | ConvertTo-Json -Compress
           Set-Content -LiteralPath "release/latest.json" -Value $manifest -Encoding utf8
           Compress-Archive -LiteralPath $root -DestinationPath "$root.zip" -Force
-      - name: Publish GitHub release
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Arrange OSS upload files
         shell: pwsh
         run: |
           $version = "${{ github.ref_name }}".TrimStart("v")
-          gh release create "${{ github.ref_name }}" "release/douyin-works-extractor-$version-windows-x64.zip" "release/app.zip" "release/latest.json" --title "${{ github.ref_name }}" --notes "Windows 完整版：解压后双击 Start-App.cmd 启动。启动器会自动检查并安装后续版本。"
+          powershell -NoProfile -ExecutionPolicy Bypass -File Prepare-DomesticRelease.ps1 -Version $version -UpdatePackage release/app.zip -FullPackage "release/douyin-works-extractor-$version-windows-x64.zip" -OutputDirectory oss-upload
+      - name: Keep verified OSS upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: douyin-works-extractor-oss-${{ github.ref_name }}
+          path: oss-upload/updates

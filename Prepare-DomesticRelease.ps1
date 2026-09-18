@@ -38,6 +38,17 @@ function Assert-ZipFile([string]$Path, [string]$Label) {
     }
 }
 
+function Get-Sha256([string]$Path) {
+    $stream = [IO.File]::OpenRead($Path)
+    $hasher = [Security.Cryptography.SHA256]::Create()
+    try {
+        return (-join ($hasher.ComputeHash($stream) | ForEach-Object { $_.ToString('x2') }))
+    } finally {
+        $hasher.Dispose()
+        $stream.Dispose()
+    }
+}
+
 function Assert-UpdatePackageLayout([string]$Path) {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $archive = [IO.Compression.ZipFile]::OpenRead($Path)
@@ -73,9 +84,9 @@ Copy-Item -LiteralPath $fullPackage -Destination $stagedFullPackage -Force
 $manifest = [ordered]@{
     version              = $normalizedVersion
     url                  = "$baseUrl/updates/app.zip"
-    sha256               = (Get-FileHash -LiteralPath $stagedUpdate -Algorithm SHA256).Hash.ToLowerInvariant()
+    sha256               = Get-Sha256 $stagedUpdate
     fullPackageUrl       = "$baseUrl/updates/$fullPackageName"
-    fullPackageSha256    = (Get-FileHash -LiteralPath $stagedFullPackage -Algorithm SHA256).Hash.ToLowerInvariant()
+    fullPackageSha256    = Get-Sha256 $stagedFullPackage
     fullPackageName      = $fullPackageName
 }
 

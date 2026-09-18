@@ -36,4 +36,6 @@ Python/
 build/
 dist/
 release/
+release-domestic-*/
+oss-upload-*/
 *.spec
