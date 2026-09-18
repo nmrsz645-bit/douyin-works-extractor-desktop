@@ -113,6 +113,28 @@ function Confirm-Update([version]$CurrentVersion, [version]$NewVersion) {
     }
 }
 
+function Move-UpdateDirectory([string]$Source, [string]$Destination) {
+    # Directory.Move is an atomic rename on the same volume. If the program is
+    # installed on another drive, use a copy/delete fallback so recovery still
+    # works instead of failing only because %TEMP% is on C:.
+    try {
+        [IO.Directory]::Move($Source, $Destination)
+        return
+    }
+    catch {
+        Copy-Item -LiteralPath $Source -Destination $Destination -Recurse -Force
+        Remove-Item -LiteralPath $Source -Recurse -Force
+    }
+}
+
+function Expand-UpdatePackage([string]$ArchivePath, [string]$Destination) {
+    # Expand-Archive in Windows PowerShell 5.1 can fail on Playwright's deep
+    # Chromium paths. The destination is intentionally short and ZipFile avoids
+    # that cmdlet's path handling.
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [IO.Compression.ZipFile]::ExtractToDirectory($ArchivePath, $Destination)
+}
+
 try {
     $localVersion = Get-AppVersion (Join-Path $AppDir "version.json")
     $manifest = Get-LatestManifest -PrimaryUrl $ManifestUrl
@@ -127,29 +149,31 @@ try {
     }
 
     $zip = Join-Path $Root ".app-update.zip"
-    $staging = Join-Path $Root ".app-update-staging"
-    $backup = Join-Path $Root ".app-backup"
+    # The bundled Chromium directory has long nested paths. Keep every update
+    # work path short so older Windows PowerShell can extract it reliably.
+    $workRoot = Join-Path ([IO.Path]::GetTempPath()) ("dwe-" + [guid]::NewGuid().ToString("N"))
+    $staging = Join-Path $workRoot "s"
+    $backup = Join-Path $workRoot "b"
     Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Path $workRoot -Force | Out-Null
     Download-UpdatePackage -Url $manifest.url -Destination $zip
     $actualHash = Get-Sha256 $zip
     if ($actualHash -ne ([string]$manifest.sha256).ToLowerInvariant()) { throw "Update package verification failed" }
-    Expand-Archive -LiteralPath $zip -DestinationPath $staging -Force
+    Expand-UpdatePackage -ArchivePath $zip -Destination $staging
     $newApp = Join-Path $staging "app"
     if (-not (Test-Path -LiteralPath $newApp)) { throw "Invalid update package structure" }
-    Move-Item -LiteralPath $AppDir -Destination $backup -Force
+    Move-UpdateDirectory -Source $AppDir -Destination $backup
     try {
-        Move-Item -LiteralPath $newApp -Destination $AppDir -Force
+        Move-UpdateDirectory -Source $newApp -Destination $AppDir
         Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction SilentlyContinue
     } catch {
         if (-not (Test-Path -LiteralPath $AppDir) -and (Test-Path -LiteralPath $backup)) {
-            Move-Item -LiteralPath $backup -Destination $AppDir -Force
+            Move-UpdateDirectory -Source $backup -Destination $AppDir
         }
         throw
     }
     Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath $staging -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $workRoot -Recurse -Force -ErrorAction SilentlyContinue
     Write-Output "Updated application from $localVersion to $remoteVersion."
 } catch {
     # The CMD launcher starts the installed application after this script exits.
