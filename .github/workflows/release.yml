@@ -26,6 +26,21 @@ jobs:
           $root = "release/douyin-works-extractor-$version-windows-x64"
           New-Item -ItemType Directory -Path "$root/app" -Force | Out-Null
           Copy-Item -Path "dist/抖音作品提取/*" -Destination "$root/app" -Recurse -Force
+          # pywebview 的 WinForms 后端依赖 pythonnet；把 Windows Desktop Runtime
+          # 放进发布目录，避免目标电脑未安装 .NET 时启动崩溃。
+          $dotnetDir = Join-Path $root "app/dotnet"
+          Invoke-WebRequest -Uri "https://dot.net/v1/dotnet-install.ps1" -OutFile "dotnet-install.ps1"
+          & .\dotnet-install.ps1 -Runtime windowsdesktop -Channel 8.0 -Architecture x64 -InstallDir $dotnetDir -NoPath
+          if ($LASTEXITCODE -ne 0) { throw "Bundled .NET Desktop Runtime installation failed." }
+          $desktopRuntime = Get-ChildItem -LiteralPath "$dotnetDir/shared/Microsoft.WindowsDesktop.App" -Directory |
+            Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $desktopRuntime) { throw "Bundled .NET Desktop Runtime is missing Microsoft.WindowsDesktop.App." }
+          $runtimeConfig = @{ runtimeOptions = @{ tfm = "net8.0"; rollForward = "LatestPatch"; framework = @{ name = "Microsoft.WindowsDesktop.App"; version = $desktopRuntime.Name } } } | ConvertTo-Json -Depth 4
+          Set-Content -LiteralPath "$dotnetDir/pythonnet.runtimeconfig.json" -Value $runtimeConfig -Encoding utf8
+          $requiredRuntimeFiles = @("$dotnetDir/dotnet.exe", "$dotnetDir/pythonnet.runtimeconfig.json")
+          foreach ($requiredRuntimeFile in $requiredRuntimeFiles) {
+            if (-not (Test-Path -LiteralPath $requiredRuntimeFile)) { throw "Bundled .NET runtime file missing: $requiredRuntimeFile" }
+          }
           New-Item -ItemType Directory -Path "$root/app/ms-playwright" -Force | Out-Null
           Get-ChildItem -LiteralPath "$env:LOCALAPPDATA/ms-playwright" -Directory |
             Where-Object { $_.Name -match '^(chromium|chromium_headless_shell|ffmpeg)-' } |
