@@ -70,6 +70,16 @@ jobs:
         with:
           name: douyin-works-extractor-oss-${{ github.ref_name }}
           path: oss-upload/updates
+      - name: Record OIDC signing-key fingerprint
+        shell: pwsh
+        run: |
+          # Only decode the public JWT header. Never print the short-lived token.
+          $oidc = Invoke-RestMethod -Headers @{ Authorization = "Bearer $env:ACTIONS_ID_TOKEN_REQUEST_TOKEN" } -Uri "$($env:ACTIONS_ID_TOKEN_REQUEST_URL)&audience=github-actions"
+          $headerPart = $oidc.value.Split('.')[0].Replace('-', '+').Replace('_', '/')
+          $headerPart = $headerPart.PadRight($headerPart.Length + ((4 - $headerPart.Length % 4) % 4), '=')
+          $header = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($headerPart)) | ConvertFrom-Json
+          $fingerprint = if ($header.x5t) { (([Convert]::FromBase64String($header.x5t.Replace('-', '+').Replace('_', '/').PadRight($header.x5t.Length + ((4 - $header.x5t.Length % 4) % 4), '='))) | ForEach-Object { $_.ToString('X2') }) -join '' } else { 'none' }
+          Write-Host "OIDC public signing key: kid=$($header.kid); sha1=$fingerprint"
       - name: Configure temporary Alibaba Cloud credentials
         uses: aliyun/configure-aliyun-credentials-action@v1
         with:
