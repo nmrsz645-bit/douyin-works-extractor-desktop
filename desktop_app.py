@@ -18,6 +18,76 @@ def _paths() -> tuple[Path, Path]:
 
 
 RESOURCE_DIR, APP_DIR = _paths()
+
+
+def _show_native_error(title: str, message: str) -> None:
+    """在 WebView 尚未启动时给出可读的 Windows 原生提示。"""
+    try:
+        import ctypes
+
+        ctypes.windll.user32.MessageBoxW(None, message, title, 0x10)
+    except Exception:
+        # 无窗口/非 Windows 调试环境不应因为提示框再次失败。
+        pass
+
+
+def _configure_bundled_dotnet() -> None:
+    """让 pythonnet 使用发布包附带的 .NET Desktop Runtime。
+
+    pywebview 的 Windows Forms 后端由 pythonnet 驱动。若只依赖用户电脑的
+    .NET 环境，部分机器会在 Python.Runtime.Loader.Initialize 阶段失败。
+    发布版把 x64 Windows Desktop Runtime 放在 app/dotnet，下列环境变量必须
+    在 import webview（也就是 import clr）之前设置。
+    """
+    dotnet_dir = APP_DIR / "dotnet"
+    runtime_config = dotnet_dir / "pythonnet.runtimeconfig.json"
+    required_paths = (
+        dotnet_dir / "dotnet.exe",
+        runtime_config,
+        dotnet_dir / "host" / "fxr",
+        dotnet_dir / "shared" / "Microsoft.NETCore.App",
+        dotnet_dir / "shared" / "Microsoft.WindowsDesktop.App",
+    )
+
+    def _present(path: Path) -> bool:
+        return path.is_file() or (path.is_dir() and any(path.iterdir()))
+
+    if all(_present(path) for path in required_paths):
+        os.environ["DOTNET_ROOT"] = str(dotnet_dir)
+        os.environ["DOTNET_ROOT_X64"] = str(dotnet_dir)
+        os.environ["PYTHONNET_RUNTIME"] = "coreclr"
+        os.environ["PYTHONNET_CORECLR_RUNTIME_CONFIG"] = str(runtime_config)
+        return
+
+    # 开发时仍可使用电脑已有的运行环境；只有发给用户的冻结版必须完整自带。
+    if getattr(sys, "frozen", False):
+        missing = "\n".join(f"• {path.relative_to(APP_DIR)}" for path in required_paths if not _present(path))
+        raise RuntimeError(
+            "程序自带的 .NET 运行环境不完整，无法启动。\n\n"
+            "请删除当前程序文件夹后，重新下载并完整解压最新版安装包；"
+            "不要只复制 app 文件夹内的部分文件。\n\n"
+            f"缺少的文件或目录：\n{missing}"
+        )
+
+
+def _report_startup_error(exc: BaseException) -> None:
+    logging.exception("桌面窗口启动失败", exc_info=exc)
+    message = str(exc)
+    if ".NET" in message or "Python.Runtime" in message or "coreclr" in message.lower():
+        message = (
+            "程序的 .NET Desktop 运行环境无法启动。\n\n"
+            "请重新下载并完整解压最新版安装包后，再双击 Start-App.cmd。\n"
+            "若仍失败，请将 desktop.log 发给软件提供方。"
+        )
+    else:
+        message = (
+            "程序启动失败。\n\n"
+            f"原因：{message[:300]}\n\n"
+            "请关闭程序后重试；仍失败时请将 desktop.log 发给软件提供方。"
+        )
+    _show_native_error("抖音作品提取启动失败", message)
+
+
 # 发布目录会在重新打包时被替换；用户数据必须放到独立、持久的本机目录。
 USER_DATA_DIR = Path(os.environ.get("LOCALAPPDATA", str(APP_DIR))) / "抖音作品提取"
 USER_DATA_DIR.mkdir(parents=True, exist_ok=True)
@@ -49,6 +119,8 @@ def _wait_for_server(url: str) -> bool:
 
 
 def main() -> None:
+    # 必须在 import webview（间接 import clr）之前执行。
+    _configure_bundled_dotnet()
     # 数据与登录会话永远写在 EXE 所在目录，而不是 PyInstaller 的临时目录。
     import db
     db.DB_PATH = USER_DATA_DIR / "data" / "douyin_monitor.db"
@@ -92,4 +164,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:
+        _report_startup_error(exc)
+        raise SystemExit(1)
