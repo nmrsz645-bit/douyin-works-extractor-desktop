@@ -91,7 +91,10 @@ $manifest = [ordered]@{
 }
 
 $manifestPath = Join-Path $updatesDirectory 'latest.json'
-$manifest | ConvertTo-Json -Compress | Set-Content -LiteralPath $manifestPath -Encoding utf8NoBOM
+# Windows PowerShell 5.1 does not support Set-Content -Encoding utf8NoBOM.
+# Write UTF-8 without BOM through .NET so local and GitHub Actions builds match.
+$utf8NoBom = New-Object Text.UTF8Encoding($false)
+[IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Compress), $utf8NoBom)
 
 # A script tag can read this cross-origin file without a browser CORS rule.
 # The download page uses it to display the same version and complete-package
@@ -102,8 +105,11 @@ $websiteManifest = [ordered]@{
 }
 $websiteManifestJson = $websiteManifest | ConvertTo-Json -Compress
 $websiteManifestPath = Join-Path $updatesDirectory 'latest.js'
-"window.DOUYIN_WORKS_EXTRACTOR_LATEST = $websiteManifestJson;" |
-    Set-Content -LiteralPath $websiteManifestPath -Encoding utf8NoBOM
+[IO.File]::WriteAllText(
+    $websiteManifestPath,
+    "window.DOUYIN_WORKS_EXTRACTOR_LATEST = $websiteManifestJson;",
+    $utf8NoBom
+)
 
 Write-Output "Release upload folder prepared: $outputDirectory"
 Write-Output "Upload the contents of $updatesDirectory to OSS path updates/."
