@@ -30,7 +30,11 @@ jobs:
           # 放进发布目录，避免目标电脑未安装 .NET 时启动崩溃。
           $dotnetDir = Join-Path $root "app/dotnet"
           Invoke-WebRequest -Uri "https://dot.net/v1/dotnet-install.ps1" -OutFile "dotnet-install.ps1"
-          & .\dotnet-install.ps1 -Runtime windowsdesktop -Channel 8.0 -Architecture x64 -InstallDir $dotnetDir -NoPath
+          # dotnet-install 的 windowsdesktop 压缩包仅含 WindowsDesktop shared
+          # framework；host/fxr 与 Microsoft.NETCore.App 要先由 dotnet runtime 提供。
+          & .\dotnet-install.ps1 -Runtime dotnet -Channel 8.0 -Architecture x64 -InstallDir $dotnetDir -NoPath
+          if ($LASTEXITCODE -ne 0) { throw "Bundled .NET Desktop Runtime installation failed." }
+          & .\dotnet-install.ps1 -Runtime windowsdesktop -Channel 8.0 -Architecture x64 -InstallDir $dotnetDir -NoPath -SkipNonVersionedFiles
           if ($LASTEXITCODE -ne 0) { throw "Bundled .NET Desktop Runtime installation failed." }
           $desktopRuntime = Get-ChildItem -LiteralPath "$dotnetDir/shared/Microsoft.WindowsDesktop.App" -Directory |
             Sort-Object Name -Descending | Select-Object -First 1
