@@ -37,9 +37,11 @@ jobs:
           if (-not $desktopRuntime) { throw "Bundled .NET Desktop Runtime is missing Microsoft.WindowsDesktop.App." }
           $runtimeConfig = @{ runtimeOptions = @{ tfm = "net8.0"; rollForward = "LatestPatch"; framework = @{ name = "Microsoft.WindowsDesktop.App"; version = $desktopRuntime.Name } } } | ConvertTo-Json -Depth 4
           Set-Content -LiteralPath "$dotnetDir/pythonnet.runtimeconfig.json" -Value $runtimeConfig -Encoding utf8
-          $requiredRuntimeFiles = @("$dotnetDir/dotnet.exe", "$dotnetDir/pythonnet.runtimeconfig.json")
+          # windowsdesktop 是嵌入式 shared runtime，不包含 dotnet.exe（CLI/SDK
+          # 才需要）。启动 pythonnet 所需的是 host/fxr 与 runtimeconfig。
+          $requiredRuntimeFiles = @("$dotnetDir/pythonnet.runtimeconfig.json", "$dotnetDir/host/fxr")
           foreach ($requiredRuntimeFile in $requiredRuntimeFiles) {
-            if (-not (Test-Path -LiteralPath $requiredRuntimeFile)) { throw "Bundled .NET runtime file missing: $requiredRuntimeFile" }
+            if (-not (Test-Path -LiteralPath $requiredRuntimeFile)) { throw "Bundled .NET runtime item missing: $requiredRuntimeFile" }
           }
           New-Item -ItemType Directory -Path "$root/app/ms-playwright" -Force | Out-Null
           Get-ChildItem -LiteralPath "$env:LOCALAPPDATA/ms-playwright" -Directory |

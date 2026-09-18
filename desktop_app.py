@@ -42,7 +42,6 @@ def _configure_bundled_dotnet() -> None:
     dotnet_dir = APP_DIR / "dotnet"
     runtime_config = dotnet_dir / "pythonnet.runtimeconfig.json"
     required_paths = (
-        dotnet_dir / "dotnet.exe",
         runtime_config,
         dotnet_dir / "host" / "fxr",
         dotnet_dir / "shared" / "Microsoft.NETCore.App",
