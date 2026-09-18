@@ -9,6 +9,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$FullPackage,
 
+    [string]$UpdatePackageName,
+
     [string]$OutputDirectory = (Join-Path $PSScriptRoot 'release-upload'),
 
     [string]$OssBaseUrl = 'https://luotuoqiluotuozhaoma-download.oss-cn-beijing.aliyuncs.com'
@@ -62,11 +64,23 @@ function Assert-UpdatePackageLayout([string]$Path) {
     }
 }
 
+function Get-SafeZipName([string]$Name, [string]$Label) {
+    if ([string]::IsNullOrWhiteSpace($Name) -or $Name -notmatch '^[A-Za-z0-9][A-Za-z0-9._-]*\.zip$') {
+        throw "$Label must be a ZIP file name without a directory: $Name"
+    }
+    return $Name
+}
+
 $normalizedVersion = Get-NormalizedVersion $Version
 $updatePackage = [IO.Path]::GetFullPath($UpdatePackage)
 $fullPackage = [IO.Path]::GetFullPath($FullPackage)
 $outputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
 $baseUrl = $OssBaseUrl.TrimEnd('/')
+
+if ([string]::IsNullOrWhiteSpace($UpdatePackageName)) {
+    $UpdatePackageName = "douyin-works-extractor-update-$normalizedVersion.zip"
+}
+$UpdatePackageName = Get-SafeZipName $UpdatePackageName 'UpdatePackageName'
 
 Assert-ZipFile $updatePackage 'Update package'
 Assert-ZipFile $fullPackage 'Full package'
@@ -75,7 +89,7 @@ Assert-UpdatePackageLayout $updatePackage
 $updatesDirectory = Join-Path $outputDirectory 'updates'
 New-Item -ItemType Directory -Force -Path $updatesDirectory | Out-Null
 
-$stagedUpdate = Join-Path $updatesDirectory 'app.zip'
+$stagedUpdate = Join-Path $updatesDirectory $UpdatePackageName
 $fullPackageName = "douyin-works-extractor-$normalizedVersion-windows-x64.zip"
 $stagedFullPackage = Join-Path $updatesDirectory $fullPackageName
 Copy-Item -LiteralPath $updatePackage -Destination $stagedUpdate -Force
@@ -83,7 +97,7 @@ Copy-Item -LiteralPath $fullPackage -Destination $stagedFullPackage -Force
 
 $manifest = [ordered]@{
     version              = $normalizedVersion
-    url                  = "$baseUrl/updates/app.zip"
+    url                  = "$baseUrl/updates/$UpdatePackageName"
     sha256               = Get-Sha256 $stagedUpdate
     fullPackageUrl       = "$baseUrl/updates/$fullPackageName"
     fullPackageSha256    = Get-Sha256 $stagedFullPackage
