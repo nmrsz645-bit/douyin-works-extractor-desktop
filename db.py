@@ -101,6 +101,20 @@ def init_db():
             fetched_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
 
+        CREATE TABLE IF NOT EXISTS single_video_results (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            input_url   TEXT,
+            author_name TEXT,
+            video_id    TEXT NOT NULL UNIQUE,
+            title       TEXT,
+            video_url   TEXT,
+            create_time INTEGER,
+            view_count  INTEGER DEFAULT 0,
+            like_count  INTEGER DEFAULT 0,
+            share_count INTEGER DEFAULT 0,
+            fetched_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+
         CREATE INDEX IF NOT EXISTS idx_snapshots_video_time
             ON snapshots(video_id, fetched_at);
 
@@ -108,6 +122,8 @@ def init_db():
             ON videos(creator_id);
         CREATE INDEX IF NOT EXISTS idx_topic_results_time
             ON topic_results(create_time DESC);
+        CREATE INDEX IF NOT EXISTS idx_single_video_results_time
+            ON single_video_results(create_time DESC);
         """)
 
     # Migration: add columns that may not exist in older DBs
@@ -294,6 +310,52 @@ def list_topic_results() -> list[dict]:
             SELECT topic, author_name, author_sec_uid, video_id, title, video_url, create_time,
                    view_count, like_count, comment_count
             FROM topic_results
+            ORDER BY create_time DESC, id DESC
+        """).fetchall()
+        return [dict(row) for row in rows]
+
+
+# ─── Single-video extraction ─────────────────────────────────
+
+def clear_single_video_results() -> int:
+    """清空单作品提取结果，不影响作者或话题结果。"""
+    with get_db() as db:
+        count = db.execute("SELECT COUNT(*) AS count FROM single_video_results").fetchone()["count"]
+        db.execute("DELETE FROM single_video_results")
+        db.commit()
+        return int(count)
+
+
+def upsert_single_video_result(input_url: str, video: dict) -> int:
+    """保存一条单作品结果；同一作品在同一轮中只保留一条。"""
+    with get_db() as db:
+        row = db.execute("""
+            INSERT INTO single_video_results
+                (input_url, author_name, video_id, title, video_url, create_time,
+                 view_count, like_count, share_count)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(video_id) DO UPDATE SET
+                input_url=excluded.input_url, author_name=excluded.author_name,
+                title=excluded.title, video_url=excluded.video_url,
+                create_time=excluded.create_time, view_count=excluded.view_count,
+                like_count=excluded.like_count, share_count=excluded.share_count,
+                fetched_at=CURRENT_TIMESTAMP
+            RETURNING id
+        """, (
+            input_url, video.get("author_name", ""), video["video_id"],
+            video.get("title", ""), video.get("video_url", ""), video.get("create_time", 0),
+            video.get("view_count", 0), video.get("like_count", 0), video.get("share_count", 0),
+        )).fetchone()
+        db.commit()
+        return row["id"]
+
+
+def list_single_video_results() -> list[dict]:
+    with get_db() as db:
+        rows = db.execute("""
+            SELECT id, input_url, author_name, video_id, title, video_url, create_time,
+                   view_count, like_count, share_count
+            FROM single_video_results
             ORDER BY create_time DESC, id DESC
         """).fetchall()
         return [dict(row) for row in rows]

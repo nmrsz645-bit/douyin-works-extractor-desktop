@@ -31,48 +31,30 @@ def _show_native_error(title: str, message: str) -> None:
         pass
 
 
-def _configure_bundled_dotnet() -> None:
-    """让 pythonnet 使用发布包附带的 .NET Desktop Runtime。
-
-    pywebview 的 Windows Forms 后端由 pythonnet 驱动。若只依赖用户电脑的
-    .NET 环境，部分机器会在 Python.Runtime.Loader.Initialize 阶段失败。
-    发布版把 x64 Windows Desktop Runtime 放在 app/dotnet，下列环境变量必须
-    在 import webview（也就是 import clr）之前设置。
-    """
-    dotnet_dir = APP_DIR / "dotnet"
-    runtime_config = dotnet_dir / "pythonnet.runtimeconfig.json"
-    required_paths = (
-        runtime_config,
-        dotnet_dir / "host" / "fxr",
-        dotnet_dir / "shared" / "Microsoft.NETCore.App",
-        dotnet_dir / "shared" / "Microsoft.WindowsDesktop.App",
-    )
-
-    def _present(path: Path) -> bool:
-        return path.is_file() or (path.is_dir() and any(path.iterdir()))
-
-    if all(_present(path) for path in required_paths):
-        os.environ["DOTNET_ROOT"] = str(dotnet_dir)
-        os.environ["DOTNET_ROOT_X64"] = str(dotnet_dir)
-        os.environ["PYTHONNET_RUNTIME"] = "coreclr"
-        os.environ["PYTHONNET_CORECLR_RUNTIME_CONFIG"] = str(runtime_config)
+def _configure_windows_desktop_runtime() -> None:
+    """在创建窗口前验证 pythonnet 所需的 Windows .NET Framework。"""
+    if not getattr(sys, "frozen", False):
         return
-
-    # 开发时仍可使用电脑已有的运行环境；只有发给用户的冻结版必须完整自带。
-    if getattr(sys, "frozen", False):
-        missing = "\n".join(f"• {path.relative_to(APP_DIR)}" for path in required_paths if not _present(path))
+    try:
+        import clr
+        clr.AddReference("System.Windows.Forms")
+        from Microsoft.Win32 import SystemEvents
+        del SystemEvents
+    except Exception as exc:
         raise RuntimeError(
-            "程序自带的 .NET 运行环境不完整，无法启动。\n\n"
-            "请删除当前程序文件夹后，重新下载并完整解压最新版安装包；"
-            "不要只复制 app 文件夹内的部分文件。\n\n"
-            f"缺少的文件或目录：\n{missing}"
-        )
+            "此程序需要 Microsoft .NET Framework 4.8.1 或更高版本才能创建桌面窗口。\n\n"
+            "请先安装或修复 .NET Framework，然后重新启动程序：\n"
+            "https://dotnet.microsoft.com/download/dotnet-framework\n\n"
+            f"检测详情：{type(exc).__name__}: {exc}"
+        ) from exc
 
 
 def _report_startup_error(exc: BaseException) -> None:
     logging.exception("桌面窗口启动失败", exc_info=exc)
     message = str(exc)
-    if ".NET" in message or "Python.Runtime" in message or "coreclr" in message.lower():
+    if "Microsoft .NET Framework 4.8.1" in message:
+        pass
+    elif ".NET" in message or "Python.Runtime" in message or "coreclr" in message.lower():
         message = (
             "程序的 .NET Desktop 运行环境无法启动。\n\n"
             "请重新下载并完整解压最新版安装包后，再双击 Start-App.cmd。\n"
@@ -119,7 +101,7 @@ def _wait_for_server(url: str) -> bool:
 
 def main() -> None:
     # 必须在 import webview（间接 import clr）之前执行。
-    _configure_bundled_dotnet()
+    _configure_windows_desktop_runtime()
     # 数据与登录会话永远写在 EXE 所在目录，而不是 PyInstaller 的临时目录。
     import db
     db.DB_PATH = USER_DATA_DIR / "data" / "douyin_monitor.db"

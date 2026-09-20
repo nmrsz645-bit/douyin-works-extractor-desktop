@@ -27,9 +27,11 @@ from db import (
     get_all_stats, get_batch_transcripts, get_today_videos, get_today_summary,
     ingest_crawl_results, clear_extraction_results, upsert_comment, list_comments, get_comment_count,
     delete_absent_comments, clear_creator_list, clear_topic_results, upsert_topic_result, list_topic_results,
+    clear_single_video_results, upsert_single_video_result, list_single_video_results,
 )
 from spider import DouyinSpider, SESSION_DIR
 from topic_spider import DouyinTopicSpider, normalise_topic_input
+from single_video_spider import DouyinSingleVideoSpider
 from utils import resolve_secuid, async_resolve_secuid
 
 logger = logging.getLogger(__name__)
@@ -57,6 +59,7 @@ app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="stat
 _login_active = False
 _extract_state = {"running": False, "current": 0, "total": 0, "found": 0, "creator": "", "message": ""}
 _topic_state = {"running": False, "found": 0, "topic": "", "message": ""}
+_single_state = {"running": False, "current": 0, "total": 0, "found": 0, "failed": 0, "message": ""}
 _download_state = {"running": False, "total": 0, "done": 0, "failed": 0, "message": ""}
 
 
@@ -311,6 +314,11 @@ async def topic_page(request: Request):
     return render("topic.html")
 
 
+@app.get("/single", response_class=HTMLResponse)
+async def single_video_page(request: Request):
+    return render("single.html")
+
+
 @app.get("/video/{video_db_id}", response_class=HTMLResponse)
 async def video_detail(request: Request, video_db_id: int):
     from db import get_db, get_transcript
@@ -398,7 +406,7 @@ async def api_login():
 @app.delete("/api/browser-cache")
 async def api_clear_browser_cache():
     """只清理本程序 Playwright 会话；不影响系统浏览器和已提取的数据。"""
-    if _login_active or _extract_state["running"] or _topic_state["running"]:
+    if _login_active or _extract_state["running"] or _topic_state["running"] or _single_state["running"]:
         return JSONResponse({"error": "请先完成或关闭当前登录/提取任务，再清空浏览器缓存"}, 409)
     try:
         if SESSION_DIR.exists():
@@ -534,6 +542,8 @@ async def api_rename_creator(creator_id: int, name: str = Body(..., embed=True))
 @app.post("/api/run")
 async def api_run_fetch(creator_id: int = None, creator_ids: list[int] | None = Query(None),
                         start_at: str = Query(""), end_at: str = Query(""), max_per_creator: int | None = Query(None)):
+    if _extract_state["running"] or _topic_state["running"] or _single_state["running"]:
+        return JSONResponse({"error": "已有提取任务正在运行，请等待完成"}, 409)
     try:
         start_ts, end_ts = _minute_range_to_timestamps(start_at, end_at)
     except ValueError as exc:
@@ -665,6 +675,90 @@ async def api_topic_status():
     return _topic_state
 
 
+@app.get("/api/single-status")
+async def api_single_status():
+    return _single_state
+
+
+@app.get("/api/single-results")
+async def api_single_results():
+    rows = list_single_video_results()
+    for row in rows:
+        row["publish_time"] = _fmt_time(row["create_time"])
+        row["url"] = f"https://www.douyin.com/video/{row['video_id']}"
+    return {"rows": rows}
+
+
+@app.post("/api/single-extract")
+async def api_single_extract(payload: dict = Body(...)):
+    """批量读取单个公开作品链接，并在每一条成功后即时写入结果。"""
+    if _extract_state["running"] or _topic_state["running"] or _single_state["running"]:
+        return JSONResponse({"error": "已有提取任务正在运行，请等待完成"}, 409)
+    raw_urls = str(payload.get("urls", ""))
+    # 兼容抖音“复制链接”带出的分享文案；每行只取其中一个作品 URL。
+    url_pattern = re.compile(r"https?://(?:www\.|v\.)?douyin\.com/[^\s]+", re.IGNORECASE)
+    urls = []
+    invalid_lines = []
+    for line in (line.strip() for line in raw_urls.splitlines() if line.strip()):
+        match = url_pattern.search(line)
+        if not match:
+            invalid_lines.append(line)
+            continue
+        urls.append(match.group(0).rstrip("，。；：、）】》'\""))
+    urls = list(dict.fromkeys(urls))
+    if not urls:
+        return JSONResponse({"error": "请逐行粘贴至少一个作品链接"}, 400)
+    if len(urls) > 1000:
+        return JSONResponse({"error": "一次最多提取 1000 个作品链接"}, 400)
+    if invalid_lines:
+        return JSONResponse({"error": "存在无法识别的抖音作品链接，请逐行检查后重试"}, 400)
+
+    cleared = clear_single_video_results()
+    _single_state.update({"running": True, "current": 0, "total": len(urls), "found": 0,
+                          "failed": 0, "message": "准备打开第 1 个作品链接"})
+
+    def _crawl_single() -> tuple[int, list[dict]]:
+        loop = asyncio.ProactorEventLoop() if sys.platform == "win32" else asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            processed = 0
+
+            def _save_one(input_url: str, video: dict):
+                nonlocal processed
+                processed += 1
+                upsert_single_video_result(input_url, video)
+                _single_state["current"] += 1
+                _single_state["found"] += 1
+                _single_state["message"] = f"已即时显示 {_single_state['found']} 条，正在继续读取"
+
+            def _update_progress(current: int, input_url: str, error: str | None):
+                _single_state["current"] = current
+                if error:
+                    _single_state["failed"] += 1
+                    _single_state["message"] = f"第 {current} 条未读取到资料，正在继续下一条"
+
+            spider = DouyinSingleVideoSpider(on_video=_save_one, on_progress=_update_progress)
+            loop.run_until_complete(spider.fetch(urls))
+            _single_state["current"] = len(urls)
+            _single_state["failed"] = len(spider.failed)
+            return processed, spider.failed
+        finally:
+            loop.close()
+
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            total, failed = await asyncio.get_running_loop().run_in_executor(pool, _crawl_single)
+        _single_state["message"] = (f"完成：成功 {total} 条，失败 {len(failed)} 条" if failed
+                                    else f"提取完成：{total} 条作品")
+        return {"message": "提取完成", "total": total, "failed": failed, "cleared": cleared}
+    except Exception as exc:
+        logger.exception("单作品提取出错")
+        _single_state["message"] = f"提取出错：{type(exc).__name__}: {exc}"
+        return JSONResponse({"error": _single_state["message"]}, 500)
+    finally:
+        _single_state["running"] = False
+
+
 @app.get("/api/topic-results")
 async def api_topic_results():
     rows = list_topic_results()
@@ -677,7 +771,7 @@ async def api_topic_results():
 @app.post("/api/topic-extract")
 async def api_topic_extract(payload: dict = Body(...)):
     """按日期（可设上限）或最新 N 条提取一个抖音话题的视频。"""
-    if _extract_state["running"] or _topic_state["running"]:
+    if _extract_state["running"] or _topic_state["running"] or _single_state["running"]:
         return JSONResponse({"error": "已有提取任务正在运行，请等待完成"}, 409)
     raw_topic = str(payload.get("topic", "")).strip()
     try:
@@ -821,9 +915,12 @@ def _load_download_items(source: str, identifiers: list[str]) -> list[dict]:
     if source == "author":
         requested = [int(value) for value in identifiers]
         sql = "SELECT id, video_id, title, video_url FROM videos WHERE id IN ({placeholders})"
-    else:
+    elif source == "topic":
         requested = identifiers
         sql = "SELECT video_id, title, video_url FROM topic_results WHERE video_id IN ({placeholders})"
+    else:
+        requested = identifiers
+        sql = "SELECT video_id, title, video_url FROM single_video_results WHERE video_id IN ({placeholders})"
 
     rows = []
     # SQLite 常见参数上限为 999；500 只是数据库查询批次，不是下载上限。
@@ -842,7 +939,7 @@ async def api_start_downloads(payload: dict = Body(...)):
         return JSONResponse({"error": "已有视频下载任务正在进行"}, 409)
     source = str(payload.get("source", ""))
     raw_ids = payload.get("ids") or []
-    if source not in {"author", "topic"} or not isinstance(raw_ids, list):
+    if source not in {"author", "topic", "single"} or not isinstance(raw_ids, list):
         return JSONResponse({"error": "下载参数无效"}, 400)
     identifiers = list(dict.fromkeys(str(value) for value in raw_ids if str(value).strip()))
     if not identifiers:
@@ -917,6 +1014,60 @@ async def api_save_topic_xlsx():
         return {"ok": True, "path": output_name}
     except Exception as exc:
         logger.exception("话题 XLSX 另存为失败")
+        return JSONResponse({"error": f"另存为失败: {exc}"}, 500)
+
+
+def _single_xlsx_response():
+    from io import BytesIO
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+    rows = list_single_video_results()
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "单作品提取结果"
+    headers = ["作者昵称", "发布时间", "标题", "播放量", "点赞数", "分享数", "作品链接"]
+    ws.append(headers)
+    for row in rows:
+        ws.append([row["author_name"], _fmt_time(row["create_time"]), row["title"],
+                   row["view_count"], row["like_count"], row["share_count"],
+                   f"https://www.douyin.com/video/{row['video_id']}"])
+    for cell in ws[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill("solid", fgColor="1F4E78")
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = ws.dimensions
+    for column, width in {"A": 20, "B": 20, "C": 48, "D": 14, "E": 14, "F": 14, "G": 48}.items():
+        ws.column_dimensions[column].width = width
+    for row_index in range(2, ws.max_row + 1):
+        for column_index in (4, 5, 6):
+            ws.cell(row_index, column_index).number_format = "#,##0"
+    output = BytesIO()
+    wb.save(output)
+    return output.getvalue()
+
+
+@app.post("/api/single-results/export-xlsx/save")
+async def api_save_single_xlsx():
+    if not list_single_video_results():
+        return JSONResponse({"error": "暂无可导出的单作品结果"}, 400)
+    try:
+        import tkinter as tk
+        from tkinter import filedialog
+        dialog = tk.Tk()
+        dialog.withdraw()
+        dialog.attributes("-topmost", True)
+        output_name = filedialog.asksaveasfilename(
+            parent=dialog, title="保存单作品提取结果", defaultextension=".xlsx",
+            initialfile="抖音单作品提取.xlsx", filetypes=[("Excel 工作簿", "*.xlsx")],
+        )
+        dialog.destroy()
+        if not output_name:
+            return {"ok": False, "cancelled": True}
+        Path(output_name).write_bytes(_single_xlsx_response())
+        return {"ok": True, "path": output_name}
+    except Exception as exc:
+        logger.exception("单作品 XLSX 另存为失败")
         return JSONResponse({"error": f"另存为失败: {exc}"}, 500)
 
 
