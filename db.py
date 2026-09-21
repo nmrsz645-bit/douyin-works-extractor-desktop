@@ -35,7 +35,8 @@ def init_db():
             follower_count INTEGER DEFAULT 0,
             following_count INTEGER DEFAULT 0,
             total_likes INTEGER DEFAULT 0,
-            bio         TEXT
+            bio         TEXT,
+            douyin_id   TEXT
         );
 
         CREATE TABLE IF NOT EXISTS videos (
@@ -91,6 +92,7 @@ def init_db():
             topic       TEXT NOT NULL,
             author_name TEXT,
             author_sec_uid TEXT,
+            author_douyin_id TEXT,
             video_id    TEXT NOT NULL UNIQUE,
             title       TEXT,
             video_url   TEXT,
@@ -104,13 +106,16 @@ def init_db():
         CREATE TABLE IF NOT EXISTS single_video_results (
             id          INTEGER PRIMARY KEY AUTOINCREMENT,
             input_url   TEXT,
+            input_order INTEGER,
             author_name TEXT,
+            author_douyin_id TEXT,
             video_id    TEXT NOT NULL UNIQUE,
             title       TEXT,
             video_url   TEXT,
             create_time INTEGER,
             view_count  INTEGER DEFAULT 0,
             like_count  INTEGER DEFAULT 0,
+            comment_count INTEGER DEFAULT 0,
             share_count INTEGER DEFAULT 0,
             fetched_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
@@ -139,6 +144,7 @@ def _migrate_columns():
         ("following_count", "INTEGER DEFAULT 0"),
         ("total_likes", "INTEGER DEFAULT 0"),
         ("bio", "TEXT"),
+        ("douyin_id", "TEXT"),
     ]
     with get_db() as db:
         existing = {r["name"] for r in db.execute("PRAGMA table_info(creators)").fetchall()}
@@ -148,6 +154,16 @@ def _migrate_columns():
         topic_existing = {r["name"] for r in db.execute("PRAGMA table_info(topic_results)").fetchall()}
         if "video_url" not in topic_existing:
             db.execute("ALTER TABLE topic_results ADD COLUMN video_url TEXT")
+        if "author_douyin_id" not in topic_existing:
+            db.execute("ALTER TABLE topic_results ADD COLUMN author_douyin_id TEXT")
+        single_existing = {r["name"] for r in db.execute("PRAGMA table_info(single_video_results)").fetchall()}
+        if "author_douyin_id" not in single_existing:
+            db.execute("ALTER TABLE single_video_results ADD COLUMN author_douyin_id TEXT")
+        if "input_order" not in single_existing:
+            db.execute("ALTER TABLE single_video_results ADD COLUMN input_order INTEGER")
+        if "comment_count" not in single_existing:
+            db.execute("ALTER TABLE single_video_results ADD COLUMN comment_count INTEGER DEFAULT 0")
+        db.execute("CREATE INDEX IF NOT EXISTS idx_single_video_results_input_order ON single_video_results(input_order ASC)")
 
 
 # ─── Creator CRUD ─────────────────────────────────────────────
@@ -176,7 +192,7 @@ def list_creators() -> list[dict]:
     with get_db() as db:
         rows = db.execute("""
             SELECT id, name, sec_uid, platform, enabled, last_fetched_at,
-                   nickname, avatar_url, follower_count, following_count, total_likes, bio
+                   nickname, avatar_url, follower_count, following_count, total_likes, bio, douyin_id
             FROM creators ORDER BY id
         """).fetchall()
         return [dict(r) for r in rows]
@@ -206,7 +222,7 @@ def update_creator_profile(creator_id: int, profile: dict):
             UPDATE creators SET
                 nickname = ?, avatar_url = ?,
                 follower_count = ?, following_count = ?,
-                total_likes = ?, bio = ?
+                total_likes = ?, bio = ?, douyin_id = ?
             WHERE id = ?
         """, (
             profile.get("nickname"),
@@ -215,6 +231,7 @@ def update_creator_profile(creator_id: int, profile: dict):
             profile.get("following_count", 0),
             profile.get("total_likes", 0),
             profile.get("bio"),
+            profile.get("douyin_id", ""),
             creator_id,
         ))
         db.commit()
@@ -284,19 +301,20 @@ def upsert_topic_result(topic: str, video: dict) -> int:
     with get_db() as db:
         row = db.execute("""
             INSERT INTO topic_results
-                (topic, author_name, author_sec_uid, video_id, title, video_url, create_time,
+                (topic, author_name, author_sec_uid, author_douyin_id, video_id, title, video_url, create_time,
                  view_count, like_count, comment_count)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(video_id) DO UPDATE SET
                 topic=excluded.topic, author_name=excluded.author_name,
-                author_sec_uid=excluded.author_sec_uid, title=excluded.title,
+                author_sec_uid=excluded.author_sec_uid, author_douyin_id=excluded.author_douyin_id,
+                title=excluded.title,
                 video_url=excluded.video_url,
                 create_time=excluded.create_time, view_count=excluded.view_count,
                 like_count=excluded.like_count, comment_count=excluded.comment_count,
                 fetched_at=CURRENT_TIMESTAMP
             RETURNING id
         """, (
-            topic, video.get("author_name", ""), video.get("author_sec_uid", ""),
+            topic, video.get("author_name", ""), video.get("author_sec_uid", ""), video.get("author_douyin_id", ""),
             video["video_id"], video.get("title", ""), video.get("video_url", ""), video.get("create_time", 0),
             video.get("view_count", 0), video.get("like_count", 0), video.get("comment_count", 0),
         )).fetchone()
@@ -307,7 +325,7 @@ def upsert_topic_result(topic: str, video: dict) -> int:
 def list_topic_results() -> list[dict]:
     with get_db() as db:
         rows = db.execute("""
-            SELECT topic, author_name, author_sec_uid, video_id, title, video_url, create_time,
+            SELECT topic, author_name, author_sec_uid, author_douyin_id, video_id, title, video_url, create_time,
                    view_count, like_count, comment_count
             FROM topic_results
             ORDER BY create_time DESC, id DESC
@@ -326,25 +344,28 @@ def clear_single_video_results() -> int:
         return int(count)
 
 
-def upsert_single_video_result(input_url: str, video: dict) -> int:
-    """保存一条单作品结果；同一作品在同一轮中只保留一条。"""
+def upsert_single_video_result(input_url: str, video: dict, input_order: int) -> int:
+    """保存一条单作品结果；同一作品重复输入时保留最先给出的顺序。"""
     with get_db() as db:
         row = db.execute("""
             INSERT INTO single_video_results
-                (input_url, author_name, video_id, title, video_url, create_time,
-                 view_count, like_count, share_count)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (input_url, input_order, author_name, author_douyin_id, video_id, title, video_url, create_time,
+                 view_count, like_count, comment_count, share_count)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(video_id) DO UPDATE SET
                 input_url=excluded.input_url, author_name=excluded.author_name,
+                author_douyin_id=excluded.author_douyin_id,
+                input_order=MIN(COALESCE(single_video_results.input_order, excluded.input_order), excluded.input_order),
                 title=excluded.title, video_url=excluded.video_url,
                 create_time=excluded.create_time, view_count=excluded.view_count,
-                like_count=excluded.like_count, share_count=excluded.share_count,
+                like_count=excluded.like_count, comment_count=excluded.comment_count,
+                share_count=excluded.share_count,
                 fetched_at=CURRENT_TIMESTAMP
             RETURNING id
         """, (
-            input_url, video.get("author_name", ""), video["video_id"],
+            input_url, input_order, video.get("author_name", ""), video.get("author_douyin_id", ""), video["video_id"],
             video.get("title", ""), video.get("video_url", ""), video.get("create_time", 0),
-            video.get("view_count", 0), video.get("like_count", 0), video.get("share_count", 0),
+            video.get("view_count", 0), video.get("like_count", 0), video.get("comment_count", 0), video.get("share_count", 0),
         )).fetchone()
         db.commit()
         return row["id"]
@@ -353,10 +374,10 @@ def upsert_single_video_result(input_url: str, video: dict) -> int:
 def list_single_video_results() -> list[dict]:
     with get_db() as db:
         rows = db.execute("""
-            SELECT id, input_url, author_name, video_id, title, video_url, create_time,
-                   view_count, like_count, share_count
+            SELECT id, input_url, input_order, author_name, author_douyin_id, video_id, title, video_url, create_time,
+                   view_count, like_count, comment_count, share_count
             FROM single_video_results
-            ORDER BY create_time DESC, id DESC
+            ORDER BY CASE WHEN input_order IS NULL THEN 1 ELSE 0 END, input_order ASC, id ASC
         """).fetchall()
         return [dict(row) for row in rows]
 

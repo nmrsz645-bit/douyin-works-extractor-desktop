@@ -73,6 +73,7 @@ def _profile_from_user(user: dict) -> dict:
     avatar_list = user.get("avatar_medium", {}).get("url_list") or user.get("avatar_thumb", {}).get("url_list") or []
     return {
         "nickname": str(user.get("nickname", "") or ""),
+        "douyin_id": str(user.get("unique_id") or user.get("short_id") or ""),
         "avatar_url": avatar_list[0] if avatar_list else "",
         "follower_count": int(user.get("follower_count", 0) or 0),
         "following_count": int(user.get("following_count", 0) or 0),
@@ -722,11 +723,12 @@ async def api_single_extract(payload: dict = Body(...)):
         asyncio.set_event_loop(loop)
         try:
             processed = 0
+            input_orders = {url: index for index, url in enumerate(urls, start=1)}
 
             def _save_one(input_url: str, video: dict):
                 nonlocal processed
                 processed += 1
-                upsert_single_video_result(input_url, video)
+                upsert_single_video_result(input_url, video, input_orders[input_url])
                 _single_state["current"] += 1
                 _single_state["found"] += 1
                 _single_state["message"] = f"已即时显示 {_single_state['found']} 条，正在继续读取"
@@ -929,7 +931,11 @@ def _load_download_items(source: str, identifiers: list[str]) -> list[dict]:
             batch = requested[start:start + 500]
             placeholders = ",".join("?" for _ in batch)
             rows.extend(db.execute(sql.format(placeholders=placeholders), batch).fetchall())
-    return [dict(row) for row in rows if row["video_url"]]
+    items = [dict(row) for row in rows if row["video_url"]]
+    # SQLite 的 IN 查询不保证顺序；下载时同样遵循用户在页面勾选的顺序。
+    positions = {str(value): index for index, value in enumerate(identifiers)}
+    key_name = "id" if source == "author" else "video_id"
+    return sorted(items, key=lambda item: positions.get(str(item[key_name]), len(positions)))
 
 
 @app.post("/api/downloads/start")
@@ -971,10 +977,10 @@ def _topic_xlsx_response():
     wb = Workbook()
     ws = wb.active
     ws.title = "话题提取结果"
-    headers = ["话题名", "作者昵称", "发布时间", "标题", "播放量", "点赞数", "评论总数", "作品链接"]
+    headers = ["话题名", "作者昵称", "作者抖音号", "发布时间", "标题", "播放量", "点赞数", "评论总数", "作品链接"]
     ws.append(headers)
     for row in rows:
-        ws.append([row["topic"], row["author_name"], _fmt_time(row["create_time"]), row["title"],
+        ws.append([row["topic"], row["author_name"], row["author_douyin_id"], _fmt_time(row["create_time"]), row["title"],
                    row["view_count"], row["like_count"], row["comment_count"],
                    f"https://www.douyin.com/video/{row['video_id']}"])
     for cell in ws[1]:
@@ -983,10 +989,10 @@ def _topic_xlsx_response():
         cell.alignment = Alignment(horizontal="center", vertical="center")
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = ws.dimensions
-    for column, width in {"A": 22, "B": 20, "C": 20, "D": 48, "E": 14, "F": 14, "G": 14, "H": 48}.items():
+    for column, width in {"A": 22, "B": 20, "C": 20, "D": 20, "E": 48, "F": 14, "G": 14, "H": 14, "I": 48}.items():
         ws.column_dimensions[column].width = width
     for row_index in range(2, ws.max_row + 1):
-        for column_index in (5, 6, 7):
+        for column_index in (6, 7, 8):
             ws.cell(row_index, column_index).number_format = "#,##0"
     output = BytesIO()
     wb.save(output)
@@ -1025,11 +1031,11 @@ def _single_xlsx_response():
     wb = Workbook()
     ws = wb.active
     ws.title = "单作品提取结果"
-    headers = ["作者昵称", "发布时间", "标题", "播放量", "点赞数", "分享数", "作品链接"]
+    headers = ["作者昵称", "作者抖音号", "发布时间", "标题", "播放量", "点赞数", "评论总数", "分享数", "作品链接"]
     ws.append(headers)
     for row in rows:
-        ws.append([row["author_name"], _fmt_time(row["create_time"]), row["title"],
-                   row["view_count"], row["like_count"], row["share_count"],
+        ws.append([row["author_name"], row["author_douyin_id"], _fmt_time(row["create_time"]), row["title"],
+                   row["view_count"], row["like_count"], row["comment_count"], row["share_count"],
                    f"https://www.douyin.com/video/{row['video_id']}"])
     for cell in ws[1]:
         cell.font = Font(bold=True, color="FFFFFF")
@@ -1037,10 +1043,10 @@ def _single_xlsx_response():
         cell.alignment = Alignment(horizontal="center", vertical="center")
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = ws.dimensions
-    for column, width in {"A": 20, "B": 20, "C": 48, "D": 14, "E": 14, "F": 14, "G": 48}.items():
+    for column, width in {"A": 20, "B": 20, "C": 20, "D": 48, "E": 14, "F": 14, "G": 14, "H": 14, "I": 48}.items():
         ws.column_dimensions[column].width = width
     for row_index in range(2, ws.max_row + 1):
-        for column_index in (4, 5, 6):
+        for column_index in (5, 6, 7, 8):
             ws.cell(row_index, column_index).number_format = "#,##0"
     output = BytesIO()
     wb.save(output)
@@ -1110,12 +1116,14 @@ async def api_results(start_at: str = Query(""), end_at: str = Query("")):
     where_clause = " AND ".join(conditions) if conditions else "1=1"
     with get_db() as db:
         rows = db.execute(f"""
-            SELECT v.id, c.name AS author, v.title, v.create_time, s.view_count, s.like_count, s.comment_count, v.video_id
+            SELECT v.id, c.name AS author, c.douyin_id AS author_douyin_id,
+                   v.title, v.create_time, s.view_count, s.like_count, s.comment_count, v.video_id
             FROM videos v JOIN creators c ON c.id=v.creator_id JOIN snapshots s ON s.video_id=v.id
             WHERE {where_clause} AND s.id=(SELECT id FROM snapshots WHERE video_id=v.id ORDER BY id DESC LIMIT 1)
             ORDER BY c.id ASC, v.create_time DESC
         """, params).fetchall()
-    return {"rows": [{"id": r["id"], "author": r["author"], "title": r["title"], "publish_time": _fmt_time(r["create_time"]),
+    return {"rows": [{"id": r["id"], "author": r["author"], "author_douyin_id": r["author_douyin_id"] or "",
+                       "title": r["title"], "publish_time": _fmt_time(r["create_time"]),
                        "view_count": r["view_count"], "like_count": r["like_count"], "comment_count": r["comment_count"],
                        "url": f"https://www.douyin.com/video/{r['video_id']}"} for r in rows]}
 
@@ -1343,7 +1351,7 @@ async def api_export_videos(creator_id: str = Query(""), start_date: str = Query
     where_clause = " AND ".join(conditions) if conditions else "1=1"
     with get_db() as db:
         rows = db.execute(f"""
-            SELECT c.name AS author, v.title, v.create_time, s.like_count,
+            SELECT c.name AS author, c.douyin_id AS author_douyin_id, v.title, v.create_time, s.like_count,
                    s.comment_count, s.share_count, s.view_count, v.video_id
             FROM videos v
             JOIN creators c ON c.id = v.creator_id
@@ -1357,10 +1365,10 @@ async def api_export_videos(creator_id: str = Query(""), start_date: str = Query
     import io
     output = io.StringIO(newline="")
     writer = csv.writer(output)
-    writer.writerow(["作者", "作品标题", "发布时间", "播放量", "点赞数", "评论总数", "作品链接"])
+    writer.writerow(["作者", "作者抖音号", "作品标题", "发布时间", "播放量", "点赞数", "评论总数", "作品链接"])
     for row in rows:
         writer.writerow([
-            row["author"], row["title"], _fmt_time(row["create_time"]), row["view_count"], row["like_count"],
+            row["author"], row["author_douyin_id"] or "", row["title"], _fmt_time(row["create_time"]), row["view_count"], row["like_count"],
             row["comment_count"],
             f"https://www.douyin.com/video/{row['video_id']}",
         ])
@@ -1389,7 +1397,8 @@ async def api_export_videos_xlsx(creator_id: str = Query(""), start_date: str = 
     where_clause = " AND ".join(conditions) if conditions else "1=1"
     with get_db() as db:
         rows = db.execute(f"""
-            SELECT c.name AS author, v.title, v.create_time, s.view_count, s.like_count, s.comment_count, v.video_id
+            SELECT c.name AS author, c.douyin_id AS author_douyin_id,
+                   v.title, v.create_time, s.view_count, s.like_count, s.comment_count, v.video_id
             FROM videos v JOIN creators c ON c.id=v.creator_id JOIN snapshots s ON s.video_id=v.id
             WHERE {where_clause} AND s.id=(SELECT id FROM snapshots WHERE video_id=v.id ORDER BY id DESC LIMIT 1)
             ORDER BY c.id ASC, v.create_time DESC
@@ -1402,11 +1411,11 @@ async def api_export_videos_xlsx(creator_id: str = Query(""), start_date: str = 
     wb = Workbook()
     ws = wb.active
     ws.title = "提取结果"
-    headers = ["作者", "发布时间", "标题", "播放量", "点赞数", "评论总数", "作品链接"]
+    headers = ["作者", "作者抖音号", "发布时间", "标题", "播放量", "点赞数", "评论总数", "作品链接"]
     ws.append(headers)
     for row in rows:
         ws.append([
-            row["author"], _fmt_time(row["create_time"]), row["title"], row["view_count"],
+            row["author"], row["author_douyin_id"] or "", _fmt_time(row["create_time"]), row["title"], row["view_count"],
             row["like_count"], row["comment_count"],
             f"https://www.douyin.com/video/{row['video_id']}",
         ])
@@ -1417,10 +1426,10 @@ async def api_export_videos_xlsx(creator_id: str = Query(""), start_date: str = 
         cell.alignment = Alignment(horizontal="center", vertical="center")
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = ws.dimensions
-    for column, width in {"A": 22, "B": 20, "C": 48, "D": 14, "E": 14, "F": 14, "G": 48}.items():
+    for column, width in {"A": 22, "B": 20, "C": 20, "D": 48, "E": 14, "F": 14, "G": 14, "H": 48}.items():
         ws.column_dimensions[column].width = width
     for row_index in range(2, ws.max_row + 1):
-        for column_index in (4, 5, 6):
+        for column_index in (5, 6, 7):
             ws.cell(row_index, column_index).number_format = "#,##0"
 
     output = BytesIO()

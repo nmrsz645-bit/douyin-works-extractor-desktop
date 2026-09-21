@@ -17,6 +17,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class Profile:
     nickname: str
+    douyin_id: str
     avatar_url: str
     follower_count: int
     following_count: int
@@ -156,6 +157,7 @@ class DouyinSpider:
                     )
                     self.profile = Profile(
                         nickname=author.get("nickname", ""),
+                        douyin_id=str(author.get("unique_id") or author.get("short_id") or ""),
                         avatar_url=avatar_list[0] if avatar_list else "",
                         follower_count=author.get("follower_count", 0),
                         following_count=author.get("following_count", 0),
@@ -222,6 +224,7 @@ class DouyinSpider:
         avatar_list = user.get("avatar_medium", {}).get("url_list") or user.get("avatar_thumb", {}).get("url_list") or []
         self.profile = Profile(
             nickname=user.get("nickname", ""),
+            douyin_id=str(user.get("unique_id") or user.get("short_id") or ""),
             avatar_url=avatar_list[0] if avatar_list else "",
             follower_count=user.get("follower_count", 0),
             following_count=user.get("following_count", 0),

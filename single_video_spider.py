@@ -40,8 +40,10 @@ class DouyinSingleVideoSpider:
             "create_time": int(aweme.get("create_time", 0) or 0),
             "view_count": int(stats.get("play_count", 0) or 0),
             "like_count": int(stats.get("digg_count", 0) or 0),
+            "comment_count": int(stats.get("comment_count", 0) or 0),
             "share_count": int(stats.get("share_count", 0) or 0),
             "author_name": str(author.get("nickname", "") or ""),
+            "author_douyin_id": str(author.get("unique_id") or author.get("short_id") or ""),
             "fetched_at": datetime.now().isoformat(),
         }
 

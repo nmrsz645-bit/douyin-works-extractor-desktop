@@ -98,6 +98,7 @@ class DouyinTopicSpider:
             "comment_count": int(stats.get("comment_count", 0) or 0),
             "author_name": author.get("nickname", ""),
             "author_sec_uid": str(author.get("sec_uid", "")),
+            "author_douyin_id": str(author.get("unique_id") or author.get("short_id") or ""),
             "fetched_at": datetime.now().isoformat(),
         }
 
