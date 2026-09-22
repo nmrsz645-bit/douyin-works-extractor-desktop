@@ -844,6 +844,28 @@ async def api_topic_extract(payload: dict = Body(...)):
         _topic_state["running"] = False
 
 
+def _safe_path_component(value: str, fallback: str) -> str:
+    """生成可用作 Windows 文件或目录名的单个路径组件。"""
+    clean = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", (value or "").strip()).rstrip(". ")
+    clean = clean[:80]
+    reserved = {"CON", "PRN", "AUX", "NUL", *(f"COM{number}" for number in range(1, 10)), *(f"LPT{number}" for number in range(1, 10))}
+    if clean.upper().split(".", 1)[0] in reserved:
+        clean = f"_{clean}"
+    return clean or fallback
+
+
+def _author_download_directory(root_directory: Path, item: dict) -> Path:
+    """按作者昵称和抖音号创建下载目录，资料缺失时使用安全兜底目录。"""
+    raw_name = str(item.get("author_name") or "").strip()
+    raw_douyin_id = str(item.get("author_douyin_id") or "").strip()
+    author_name = _safe_path_component(raw_name, "") if raw_name else ""
+    douyin_id = _safe_path_component(raw_douyin_id, "") if raw_douyin_id else ""
+    directory_name = f"{author_name}_{douyin_id}" if author_name and douyin_id else (author_name or douyin_id or "未知作者")
+    directory = root_directory / directory_name
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
 def _safe_video_filename(title: str, video_id: str, directory: Path) -> Path:
     """只使用标题做文件名；重复标题自动追加序号，避免覆盖已有文件。"""
     clean = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", (title or "").strip()).rstrip(". ")
@@ -862,7 +884,8 @@ def _download_video_file(item: dict, directory: Path) -> Path:
     url = str(item.get("video_url") or "")
     if not url:
         raise ValueError("该作品未返回可下载的视频地址")
-    output = _safe_video_filename(str(item.get("title") or ""), str(item.get("video_id") or ""), directory)
+    author_directory = _author_download_directory(directory, item)
+    output = _safe_video_filename(str(item.get("title") or ""), str(item.get("video_id") or ""), author_directory)
     temporary = output.with_suffix(".part")
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120 Safari/537.36",
@@ -895,7 +918,7 @@ def _run_download_batch(items: list[dict], directory: Path):
             try:
                 output = _download_video_file(item, directory)
                 _download_state["done"] += 1
-                _download_state["message"] = f"已保存：{output.name}"
+                _download_state["message"] = f"已保存：{output.relative_to(directory)}"
             except Exception as exc:
                 _download_state["failed"] += 1
                 _download_state["message"] = f"下载失败：{item.get('title') or item.get('video_id')}（{exc}）"
@@ -916,13 +939,20 @@ def _load_download_items(source: str, identifiers: list[str]) -> list[dict]:
     """读取任意数量的下载项；分批查询仅为避开 SQLite 参数数量上限。"""
     if source == "author":
         requested = [int(value) for value in identifiers]
-        sql = "SELECT id, video_id, title, video_url FROM videos WHERE id IN ({placeholders})"
+        sql = """
+            SELECT v.id, v.video_id, v.title, v.video_url,
+                   COALESCE(NULLIF(c.nickname, ''), c.name, '') AS author_name,
+                   COALESCE(c.douyin_id, '') AS author_douyin_id
+            FROM videos AS v
+            INNER JOIN creators AS c ON c.id = v.creator_id
+            WHERE v.id IN ({placeholders})
+        """
     elif source == "topic":
         requested = identifiers
-        sql = "SELECT video_id, title, video_url FROM topic_results WHERE video_id IN ({placeholders})"
+        sql = "SELECT video_id, title, video_url, author_name, author_douyin_id FROM topic_results WHERE video_id IN ({placeholders})"
     else:
         requested = identifiers
-        sql = "SELECT video_id, title, video_url FROM single_video_results WHERE video_id IN ({placeholders})"
+        sql = "SELECT video_id, title, video_url, author_name, author_douyin_id FROM single_video_results WHERE video_id IN ({placeholders})"
 
     rows = []
     # SQLite 常见参数上限为 999；500 只是数据库查询批次，不是下载上限。
