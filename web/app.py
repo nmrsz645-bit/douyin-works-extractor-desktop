@@ -32,6 +32,7 @@ from db import (
 from spider import DouyinSpider, SESSION_DIR
 from topic_spider import DouyinTopicSpider, normalise_topic_input
 from single_video_spider import DouyinSingleVideoSpider
+from extraction_pause import wait_if_paused
 from utils import resolve_secuid, async_resolve_secuid
 
 logger = logging.getLogger(__name__)
@@ -57,10 +58,45 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="抖音博主监控", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 _login_active = False
-_extract_state = {"running": False, "current": 0, "total": 0, "found": 0, "creator": "", "message": ""}
-_topic_state = {"running": False, "found": 0, "topic": "", "message": ""}
-_single_state = {"running": False, "current": 0, "total": 0, "found": 0, "failed": 0, "message": ""}
+_extract_state = {"running": False, "paused": False, "current": 0, "total": 0, "found": 0, "creator": "", "message": ""}
+_topic_state = {"running": False, "paused": False, "found": 0, "topic": "", "message": ""}
+_single_state = {"running": False, "paused": False, "current": 0, "total": 0, "found": 0, "failed": 0, "message": ""}
 _download_state = {"running": False, "total": 0, "done": 0, "failed": 0, "message": ""}
+_extract_pause = threading.Event()
+_topic_pause = threading.Event()
+_single_pause = threading.Event()
+for _pause_gate in (_extract_pause, _topic_pause, _single_pause):
+    _pause_gate.set()
+
+
+def _change_extraction_pause(source: str, pause: bool):
+    targets = {
+        "author": (_extract_state, _extract_pause),
+        "topic": (_topic_state, _topic_pause),
+        "single": (_single_state, _single_pause),
+    }
+    target = targets.get(source)
+    if target is None:
+        return JSONResponse({"error": "提取类型无效"}, 400)
+    state, gate = target
+    if not state["running"]:
+        return JSONResponse({"error": "当前没有正在运行的提取任务"}, 409)
+    if pause:
+        gate.clear()
+    else:
+        gate.set()
+    state["paused"] = pause
+    return {"ok": True, "paused": pause}
+
+
+@app.post("/api/extraction/pause")
+async def api_pause_extraction(payload: dict = Body(...)):
+    return _change_extraction_pause(str(payload.get("source", "")), True)
+
+
+@app.post("/api/extraction/resume")
+async def api_resume_extraction(payload: dict = Body(...)):
+    return _change_extraction_pause(str(payload.get("source", "")), False)
 
 
 def render(name: str, **ctx) -> HTMLResponse:
@@ -565,7 +601,9 @@ async def api_run_fetch(creator_id: int = None, creator_ids: list[int] | None = 
 
     # 用户选择每次提取重新开始；清除旧作品数据但保留作者资料。
     cleared = clear_extraction_results()
-    _extract_state.update({"running": True, "current": 0, "total": len(creators), "found": 0, "creator": "", "message": "准备打开浏览器"})
+    _extract_pause.set()
+    _extract_state.update({"running": True, "paused": False, "current": 0, "total": len(creators),
+                           "found": 0, "creator": "", "message": "准备打开浏览器"})
 
     def _crawl_one(c: dict) -> tuple:
         loop = asyncio.ProactorEventLoop()
@@ -585,7 +623,7 @@ async def api_run_fetch(creator_id: int = None, creator_ids: list[int] | None = 
 
             spider = DouyinSpider(headless=False, max_scrolls=80, page_load_wait=0, idle_limit=20,
                                   start_ts=start_ts, end_ts=end_ts, on_videos=_save_batch,
-                                  max_videos=max_per_creator)
+                                  max_videos=max_per_creator, pause_gate=_extract_pause)
             videos = loop.run_until_complete(spider.fetch(c["sec_uid"], max_retries=1))
             profile = spider.profile.to_dict() if spider.profile else None
             if spider._error:
@@ -599,6 +637,7 @@ async def api_run_fetch(creator_id: int = None, creator_ids: list[int] | None = 
         failed = []
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
             for index, c in enumerate(creators, start=1):
+                await wait_if_paused(_extract_pause)
                 _extract_state.update({"current": index, "creator": c["name"], "message": "正在打开主页并向下滑动"})
                 batch_count, profile, err = await asyncio.get_running_loop().run_in_executor(
                     pool, _crawl_one, c
@@ -615,6 +654,7 @@ async def api_run_fetch(creator_id: int = None, creator_ids: list[int] | None = 
 
             # 自动转录新视频
             try:
+                await wait_if_paused(_extract_pause)
                 from transcriber import WHISPER_AVAILABLE
                 if WHISPER_AVAILABLE:
                     def _transcribe_all():
@@ -633,6 +673,8 @@ async def api_run_fetch(creator_id: int = None, creator_ids: list[int] | None = 
         logger.exception("抓取出错")
         return JSONResponse({"error": f"抓取出错: {detail}"}, 500)
     finally:
+        _extract_pause.set()
+        _extract_state["paused"] = False
         _extract_state["running"] = False
 
 
@@ -715,7 +757,8 @@ async def api_single_extract(payload: dict = Body(...)):
         return JSONResponse({"error": "存在无法识别的抖音作品链接，请逐行检查后重试"}, 400)
 
     cleared = clear_single_video_results()
-    _single_state.update({"running": True, "current": 0, "total": len(urls), "found": 0,
+    _single_pause.set()
+    _single_state.update({"running": True, "paused": False, "current": 0, "total": len(urls), "found": 0,
                           "failed": 0, "message": "准备打开第 1 个作品链接"})
 
     def _crawl_single() -> tuple[int, list[dict]]:
@@ -739,7 +782,8 @@ async def api_single_extract(payload: dict = Body(...)):
                     _single_state["failed"] += 1
                     _single_state["message"] = f"第 {current} 条未读取到资料，正在继续下一条"
 
-            spider = DouyinSingleVideoSpider(on_video=_save_one, on_progress=_update_progress)
+            spider = DouyinSingleVideoSpider(on_video=_save_one, on_progress=_update_progress,
+                                             pause_gate=_single_pause)
             loop.run_until_complete(spider.fetch(urls))
             _single_state["current"] = len(urls)
             _single_state["failed"] = len(spider.failed)
@@ -758,6 +802,8 @@ async def api_single_extract(payload: dict = Body(...)):
         _single_state["message"] = f"提取出错：{type(exc).__name__}: {exc}"
         return JSONResponse({"error": _single_state["message"]}, 500)
     finally:
+        _single_pause.set()
+        _single_state["paused"] = False
         _single_state["running"] = False
 
 
@@ -807,7 +853,9 @@ async def api_topic_extract(payload: dict = Body(...)):
         return JSONResponse({"error": str(exc)}, 400)
 
     cleared = clear_topic_results()
-    _topic_state.update({"running": True, "found": 0, "topic": display_topic, "message": "准备打开话题页面"})
+    _topic_pause.set()
+    _topic_state.update({"running": True, "paused": False, "found": 0, "topic": display_topic,
+                         "message": "准备打开话题页面"})
 
     def _crawl_topic() -> tuple[int, str | None]:
         loop = asyncio.ProactorEventLoop() if sys.platform == "win32" else asyncio.new_event_loop()
@@ -822,7 +870,8 @@ async def api_topic_extract(payload: dict = Body(...)):
                 _topic_state["found"] += len(videos)
                 _topic_state["message"] = f"已即时显示 {batch_count} 条符合条件的话题作品"
             spider = DouyinTopicSpider(raw_topic, start_ts=start_ts, end_ts=end_ts,
-                                       max_videos=max_videos, on_videos=_save_batch, headless=False)
+                                       max_videos=max_videos, on_videos=_save_batch, headless=False,
+                                       pause_gate=_topic_pause)
             loop.run_until_complete(spider.fetch())
             return batch_count, spider._error
         finally:
@@ -841,6 +890,8 @@ async def api_topic_extract(payload: dict = Body(...)):
         logger.exception("话题提取出错")
         return JSONResponse({"error": f"话题提取出错: {type(exc).__name__}: {exc}"}, 500)
     finally:
+        _topic_pause.set()
+        _topic_state["paused"] = False
         _topic_state["running"] = False
 
 

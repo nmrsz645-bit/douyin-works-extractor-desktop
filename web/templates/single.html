@@ -7,6 +7,7 @@
   <textarea id="video-urls" rows="8" placeholder="https://www.douyin.com/video/...&#10;https://v.douyin.com/..." style="width:min(880px,100%);margin-top:8px"></textarea>
   <div style="margin-top:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
     <button id="extract" class="btn btn-primary" onclick="extractVideos()">开始提取</button>
+    <button id="pause-extract" class="btn btn-outline" data-source="single" onclick="toggleExtractPause()" style="display:none">暂停提取</button>
     <span id="status" style="font-size:14px;color:var(--text-secondary)">粘贴作品链接后开始提取。</span>
   </div>
 </section>
@@ -28,15 +29,48 @@
 </section>
 
 <script>
-let singleTimer=null, singleLoading=false, downloadTimer=null;
+let singleTimer=null, singleLoading=false, downloadTimer=null, singlePending=false;
 const fmt=v=>Number(v||0).toLocaleString();
 function updateDownloadButton(){const selected=document.querySelectorAll('.result-select:checked').length,b=document.getElementById('download-selected');b.disabled=!selected;b.textContent=selected?`下载勾选视频（${selected}）`:'下载勾选视频'}
 async function loadResults(){const r=await fetch('/api/single-results'),j=await r.json();if(!r.ok)throw new Error(j.error||'读取结果失败');const b=document.querySelector('#result-table tbody');b.innerHTML='';if(!j.rows.length)b.innerHTML='<tr><td colspan="10">正在等待作品资料…</td></tr>';for(const x of j.rows){const tr=document.createElement('tr'),select=document.createElement('td'),box=document.createElement('input');box.type='checkbox';box.className='result-select';box.value=x.video_id;box.checked=true;box.onchange=updateDownloadButton;select.appendChild(box);tr.appendChild(select);[x.author_name||'-',x.author_douyin_id||'-',x.publish_time,x.title||'-',fmt(x.view_count),fmt(x.like_count),fmt(x.comment_count),fmt(x.share_count)].forEach(v=>{const td=document.createElement('td');td.textContent=v;tr.appendChild(td)});const td=document.createElement('td'),a=document.createElement('a');a.href=x.url;a.target='_blank';a.rel='noopener';a.textContent='打开作品';td.appendChild(a);tr.appendChild(td);b.appendChild(tr)}const hasRows=!!j.rows.length;document.getElementById('export-xlsx').style.display=hasRows?'inline-flex':'none';document.getElementById('download-selected').style.display=hasRows?'inline-flex':'none';updateDownloadButton()}
-async function updateStatus(){try{const r=await fetch('/api/single-status'),s=await r.json();if(s.running){document.getElementById('status').textContent=`正在读取 ${s.current||0}/${s.total||0}：${s.message}（成功 ${s.found||0} 条）`;if(!singleLoading){singleLoading=true;try{await loadResults()}finally{singleLoading=false}}}}catch(e){}}
-async function extractVideos(){const urls=document.getElementById('video-urls').value.trim();if(!urls)return showToast('请逐行粘贴作品链接','warning');const b=document.getElementById('extract');b.disabled=true;b.textContent='提取中…';document.querySelector('#result-table tbody').innerHTML='<tr><td colspan="10">已清空上次结果，正在读取本次作品…</td></tr>';document.getElementById('export-xlsx').style.display='none';document.getElementById('download-selected').style.display='none';document.getElementById('status').textContent='正在清空上次结果并准备打开作品链接…';singleTimer=setInterval(updateStatus,700);try{const r=await fetch('/api/single-extract',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({urls})}),j=await r.json();if(!r.ok)throw new Error(j.error||'提取失败');document.getElementById('status').textContent=`完成：成功 ${j.total} 条`+(j.failed?.length?`；失败 ${j.failed.length} 条。请在浏览器确认登录或验证后可重试失败链接。`:'');await loadResults()}catch(e){document.getElementById('status').textContent=e.message;showToast(e.message,'error')}finally{clearInterval(singleTimer);singleTimer=null;b.disabled=false;b.textContent='开始提取'}}
+async function updateStatus(){
+  try{
+    const r=await fetch('/api/single-status'),s=await r.json();
+    syncExtractionPause(s);
+    if(s.running){
+      const button=document.getElementById('extract');button.disabled=true;button.textContent='提取中…';
+      if(!singleTimer)singleTimer=setInterval(updateStatus,700);
+      const prefix=s.paused?'已请求暂停，等待当前请求完成':'正在读取';
+      document.getElementById('status').textContent=`${prefix} ${s.current||0}/${s.total||0}：${s.message}（成功 ${s.found||0} 条）`;
+      if(!singleLoading){singleLoading=true;try{await loadResults()}finally{singleLoading=false}}
+    }else if(singleTimer&&!singlePending){
+      clearInterval(singleTimer);singleTimer=null;
+      const button=document.getElementById('extract');button.disabled=false;button.textContent='开始提取';
+      document.getElementById('status').textContent=s.message||'提取已结束';
+    }
+  }catch(e){}
+}
+async function extractVideos(){
+  const urls=document.getElementById('video-urls').value.trim();
+  if(!urls)return showToast('请逐行粘贴作品链接','warning');
+  const b=document.getElementById('extract');singlePending=true;b.disabled=true;b.textContent='提取中…';
+  syncExtractionPause({running:true,paused:false});
+  document.querySelector('#result-table tbody').innerHTML='<tr><td colspan="10">已清空上次结果，正在读取本次作品…</td></tr>';
+  document.getElementById('export-xlsx').style.display='none';
+  document.getElementById('download-selected').style.display='none';
+  document.getElementById('status').textContent='正在清空上次结果并准备打开作品链接…';
+  singleTimer=setInterval(updateStatus,700);
+  try{
+    const r=await fetch('/api/single-extract',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({urls})}),j=await r.json();
+    if(!r.ok)throw new Error(j.error||'提取失败');
+    document.getElementById('status').textContent=`完成：成功 ${j.total} 条`+(j.failed?.length?`；失败 ${j.failed.length} 条。请在浏览器确认登录或验证后可重试失败链接。`:'');
+    await loadResults();
+  }catch(e){document.getElementById('status').textContent=e.message;showToast(e.message,'error')}
+  finally{singlePending=false;clearInterval(singleTimer);singleTimer=null;syncExtractionPause({running:false,paused:false});b.disabled=false;b.textContent='开始提取'}
+}
 async function pollDownload(){try{const r=await fetch('/api/download-status'),d=await r.json();if(d.running){document.getElementById('status').textContent=`正在下载 ${d.done+d.failed}/${d.total}：${d.message}`;return}if(downloadTimer){clearInterval(downloadTimer);downloadTimer=null;document.getElementById('status').textContent=d.message;showToast(d.message,d.failed?'warning':'success')}}catch(e){}}
 async function downloadSelected(){const ids=[...document.querySelectorAll('.result-select:checked')].map(x=>x.value);if(!ids.length)return;const b=document.getElementById('download-selected');b.disabled=true;b.textContent='请选择保存位置…';try{const r=await fetch('/api/downloads/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:'single',ids})}),j=await r.json();if(!r.ok)throw new Error(j.error||'下载任务启动失败');if(j.cancelled){document.getElementById('status').textContent='已取消选择保存位置';return}document.getElementById('status').textContent=`正在下载 ${j.total} 条视频到：${j.path}`;downloadTimer=setInterval(pollDownload,800)}catch(e){showToast(e.message,'error');document.getElementById('status').textContent=e.message}finally{updateDownloadButton()}}
 async function exportXlsx(){const b=document.getElementById('export-xlsx');b.disabled=true;b.textContent='正在选择位置…';try{const r=await fetch('/api/single-results/export-xlsx/save',{method:'POST'}),j=await r.json();if(!r.ok)throw new Error(j.error||'导出失败');if(j.cancelled){document.getElementById('status').textContent='已取消导出';return}document.getElementById('status').textContent=`XLSX 已导出：${j.path}`;showToast('XLSX 已保存','success')}catch(e){showToast(e.message,'error')}finally{b.disabled=false;b.textContent='导出 XLSX'}}
-loadResults();
+loadResults().then(updateStatus);
 </script>
 {% endblock %}

@@ -18,11 +18,11 @@
     <p style="margin:9px 0 0;font-size:13px;color:var(--text-secondary)">按发布时间精确到分钟筛选；达到指定条数即停止继续滑动。</p>
   </div>
   <div style="margin-top:12px"><label>只提取最新前 <input id="top-count" type="number" min="1" max="1000" step="1" style="width:90px" oninput="useTopMode()"> 条</label><span style="margin-left:8px;font-size:13px;color:var(--text-secondary)">填写后会自动取消日期范围。</span></div>
-  <div style="margin-top:18px;display:flex;gap:10px;align-items:center"><button id="extract" class="btn btn-primary" onclick="extractTopic()">开始提取</button><span id="status" style="font-size:14px;color:var(--text-secondary)">请输入话题并设置筛选条件。</span></div>
+  <div style="margin-top:18px;display:flex;gap:10px;align-items:center"><button id="extract" class="btn btn-primary" onclick="extractTopic()">开始提取</button><button id="pause-extract" class="btn btn-outline" data-source="topic" onclick="toggleExtractPause()" style="display:none">暂停提取</button><span id="status" style="font-size:14px;color:var(--text-secondary)">请输入话题并设置筛选条件。</span></div>
 </section>
 <section style="max-width:1100px;margin:34px auto"><div style="display:flex;align-items:center;justify-content:space-between;gap:12px"><h2 style="margin:0;font-size:18px">话题提取结果</h2><div style="display:flex;gap:8px"><button id="download-selected" class="btn btn-outline btn-sm" onclick="downloadSelected()" style="display:none" disabled>下载勾选视频</button><button id="export-xlsx" class="btn btn-outline btn-sm" onclick="exportXlsx()" style="display:none">导出 XLSX</button></div></div><div style="overflow:auto;margin-top:12px"><table class="table" id="result-table"><thead><tr><th>选择</th><th>话题名</th><th>作者昵称</th><th>作者抖音号</th><th>发布时间</th><th>标题</th><th>播放量</th><th>点赞数</th><th>评论总数</th><th>作品链接</th></tr></thead><tbody><tr><td colspan="10" style="color:var(--text-secondary)">符合条件的话题作品会即时显示在这里。</td></tr></tbody></table></div></section>
 <script>
-let topicTimer=null,topicLoading=false,downloadTimer=null;
+let topicTimer=null,topicLoading=false,downloadTimer=null,topicPending=false;
 const fmt=v=>Number(v||0).toLocaleString();
 function toggleFilter(){const box=document.getElementById('filters'),open=box.style.display!=='none';box.style.display=open?'none':'block';document.getElementById('filter-button').textContent=open?'筛选日期':'收起筛选'}
 function useTopMode(){const active=Number(document.getElementById('top-count').value)>0;for(const id of ['start-at','end-at','date-count']){const el=document.getElementById(id);el.disabled=active;if(active)el.value=''}}
@@ -31,9 +31,42 @@ function updateDownloadButton(){const selected=document.querySelectorAll('.resul
 async function loadResults(){const r=await fetch('/api/topic-results'),j=await r.json();if(!r.ok)throw new Error(j.error||'读取结果失败');const b=document.querySelector('#result-table tbody');b.innerHTML='';if(!j.rows.length)b.innerHTML='<tr><td colspan="10">正在等待符合条件的话题作品…</td></tr>';for(const x of j.rows){const tr=document.createElement('tr'),select=document.createElement('td'),box=document.createElement('input');box.type='checkbox';box.className='result-select';box.value=x.video_id;box.checked=true;box.onchange=updateDownloadButton;select.appendChild(box);tr.appendChild(select);[x.topic,x.author_name||'-',x.author_douyin_id||'-',x.publish_time,x.title||'-',fmt(x.view_count),fmt(x.like_count),fmt(x.comment_count)].forEach(v=>{const td=document.createElement('td');td.textContent=v;tr.appendChild(td)});const td=document.createElement('td'),a=document.createElement('a');a.href=x.url;a.target='_blank';a.rel='noopener';a.textContent='打开作品';td.appendChild(a);tr.appendChild(td);b.appendChild(tr)}const hasRows=!!j.rows.length;document.getElementById('export-xlsx').style.display=hasRows?'inline-flex':'none';document.getElementById('download-selected').style.display=hasRows?'inline-flex':'none';updateDownloadButton()}
 async function pollDownload(){try{const r=await fetch('/api/download-status'),d=await r.json();if(d.running){document.getElementById('status').textContent=`正在下载 ${d.done+d.failed}/${d.total}：${d.message}`;return}if(downloadTimer){clearInterval(downloadTimer);downloadTimer=null;document.getElementById('status').textContent=d.message;showToast(d.message,d.failed?'warning':'success')}}catch(e){}}
 async function downloadSelected(){const ids=[...document.querySelectorAll('.result-select:checked')].map(x=>x.value);if(!ids.length)return;const b=document.getElementById('download-selected');b.disabled=true;b.textContent='请选择保存位置…';try{const r=await fetch('/api/downloads/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:'topic',ids})}),j=await r.json();if(!r.ok)throw new Error(j.error||'下载任务启动失败');if(j.cancelled){document.getElementById('status').textContent='已取消选择保存位置';return}document.getElementById('status').textContent=`正在下载 ${j.total} 条视频到：${j.path}`;downloadTimer=setInterval(pollDownload,800)}catch(e){showToast(e.message,'error');document.getElementById('status').textContent=e.message}finally{updateDownloadButton()}}
-async function updateStatus(){try{const r=await fetch('/api/topic-status'),s=await r.json();if(s.running){document.getElementById('status').textContent=`正在提取 ${s.topic}：${s.message}（累计 ${s.found||0} 条）`;if(!topicLoading){topicLoading=true;try{await loadResults()}finally{topicLoading=false}}}}catch(e){}}
-async function extractTopic(){const topic=document.getElementById('topic-input').value.trim(),start=document.getElementById('start-at').value,end=document.getElementById('end-at').value,top=document.getElementById('top-count').value,max=document.getElementById('date-count').value;if(!topic)return showToast('请输入一个话题名或话题链接','warning');if(!top&&(!start||!end||!max))return showToast('请选择完整日期范围并填写提取条数，或填写最新前几条','warning');const b=document.getElementById('extract');b.disabled=true;b.textContent='提取中…';document.querySelector('#result-table tbody').innerHTML='<tr><td colspan="8">已清空上次话题结果，正在提取本次作品…</td></tr>';document.getElementById('export-xlsx').style.display='none';document.getElementById('status').textContent='正在清空上次话题结果并准备提取…';topicTimer=setInterval(updateStatus,1000);try{const r=await fetch('/api/topic-extract',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({topic,start_at:start,end_at:end,top_count:top,max_results:max})}),j=await r.json();if(!r.ok)throw new Error(j.error||'提取失败');document.getElementById('status').textContent=`完成：本次提取 ${j.total} 条符合条件的话题作品`;await loadResults()}catch(e){document.getElementById('status').textContent=e.message;showToast(e.message,'error')}finally{clearInterval(topicTimer);topicTimer=null;b.disabled=false;b.textContent='开始提取'}}
+async function updateStatus(){
+  try{
+    const r=await fetch('/api/topic-status'),s=await r.json();
+    syncExtractionPause(s);
+    if(s.running){
+      const button=document.getElementById('extract');button.disabled=true;button.textContent='提取中…';
+      if(!topicTimer)topicTimer=setInterval(updateStatus,1000);
+      const prefix=s.paused?'已请求暂停，等待当前请求完成':'正在提取';
+      document.getElementById('status').textContent=`${prefix} ${s.topic}：${s.message}（累计 ${s.found||0} 条）`;
+      if(!topicLoading){topicLoading=true;try{await loadResults()}finally{topicLoading=false}}
+    }else if(topicTimer&&!topicPending){
+      clearInterval(topicTimer);topicTimer=null;
+      const button=document.getElementById('extract');button.disabled=false;button.textContent='开始提取';
+      document.getElementById('status').textContent=s.message||'提取已结束';
+    }
+  }catch(e){}
+}
+async function extractTopic(){
+  const topic=document.getElementById('topic-input').value.trim(),start=document.getElementById('start-at').value,end=document.getElementById('end-at').value,top=document.getElementById('top-count').value,max=document.getElementById('date-count').value;
+  if(!topic)return showToast('请输入一个话题名或话题链接','warning');
+  if(!top&&(!start||!end||!max))return showToast('请选择完整日期范围并填写提取条数，或填写最新前几条','warning');
+  const b=document.getElementById('extract');topicPending=true;b.disabled=true;b.textContent='提取中…';
+  syncExtractionPause({running:true,paused:false});
+  document.querySelector('#result-table tbody').innerHTML='<tr><td colspan="10">已清空上次话题结果，正在提取本次作品…</td></tr>';
+  document.getElementById('export-xlsx').style.display='none';
+  document.getElementById('status').textContent='正在清空上次话题结果并准备提取…';
+  topicTimer=setInterval(updateStatus,1000);
+  try{
+    const r=await fetch('/api/topic-extract',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({topic,start_at:start,end_at:end,top_count:top,max_results:max})}),j=await r.json();
+    if(!r.ok)throw new Error(j.error||'提取失败');
+    document.getElementById('status').textContent=`完成：本次提取 ${j.total} 条符合条件的话题作品`;
+    await loadResults();
+  }catch(e){document.getElementById('status').textContent=e.message;showToast(e.message,'error')}
+  finally{topicPending=false;clearInterval(topicTimer);topicTimer=null;syncExtractionPause({running:false,paused:false});b.disabled=false;b.textContent='开始提取'}
+}
 async function exportXlsx(){const b=document.getElementById('export-xlsx');b.disabled=true;b.textContent='正在选择位置…';try{const r=await fetch('/api/topic-results/export-xlsx/save',{method:'POST'}),j=await r.json();if(!r.ok)throw new Error(j.error||'导出失败');if(j.cancelled){document.getElementById('status').textContent='已取消导出';return}document.getElementById('status').textContent=`XLSX 已导出：${j.path}`;showToast('XLSX 已保存','success')}catch(e){showToast(e.message,'error')}finally{b.disabled=false;b.textContent='导出 XLSX'}}
-loadResults();
+loadResults().then(updateStatus);
 </script>
 {% endblock %}

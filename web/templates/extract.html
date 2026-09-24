@@ -12,12 +12,12 @@
   <h2 style="font-size:18px">提取作品</h2><button id="filter-button" class="btn btn-outline" onclick="toggleFilter()">筛选日期</button>
   <div id="filters" style="display:none;margin-top:10px;padding:14px;border:1px solid var(--border);border-radius:8px"><label>开始时间 <input id="start-at" type="datetime-local" oninput="useDateMode()"></label><label style="margin-left:12px">结束时间 <input id="end-at" type="datetime-local" oninput="useDateMode()"></label><p style="margin:9px 0 0;font-size:13px;color:var(--text-secondary)">按作品发布时间筛选，精确到分钟；范围外作品不会保存。</p></div>
   <div style="margin-top:12px"><label>每位作者提取前 <input id="top-count" type="number" min="1" max="1000" step="1" style="width:90px" oninput="useCountMode()"> 条</label><span style="margin-left:8px;font-size:13px;color:var(--text-secondary)">填写后会自动取消日期范围。</span></div>
-  <div style="margin-top:18px;display:flex;gap:10px;align-items:center"><button id="extract" class="btn btn-primary" onclick="extractAll()" disabled>全部提取</button><span id="status" style="font-size:14px;color:var(--text-secondary)">请先添加作者主页。</span></div>
+  <div style="margin-top:18px;display:flex;gap:10px;align-items:center"><button id="extract" class="btn btn-primary" onclick="extractAll()" disabled>全部提取</button><button id="pause-extract" class="btn btn-outline" data-source="author" onclick="toggleExtractPause()" style="display:none">暂停提取</button><span id="status" style="font-size:14px;color:var(--text-secondary)">请先添加作者主页。</span></div>
 </section>
 <section style="max-width:1100px;margin:34px auto"><div style="display:flex;align-items:center;justify-content:space-between;gap:12px"><h2 style="margin:0;font-size:18px">提取结果</h2><div style="display:flex;gap:8px;align-items:center"><button id="download-selected" class="btn btn-outline btn-sm" onclick="downloadSelected()" style="display:none" disabled>下载勾选视频</button><a id="export" class="btn btn-outline btn-sm" href="#" style="display:none">导出 CSV</a><button id="export-xlsx" class="btn btn-outline btn-sm" onclick="exportXlsx()" style="display:none">导出 XLSX</button></div></div><div style="overflow:auto;margin-top:12px"><table class="table" id="result-table"><thead><tr><th>选择</th><th>作者抖音号</th><th>发布时间</th><th>标题</th><th>播放量</th><th>点赞数</th><th>评论总数</th><th>作品链接</th></tr></thead><tbody><tr><td colspan="8" style="color:var(--text-secondary)">提取到的作品会即时显示在这里。</td></tr></tbody></table></div></section>
 <script>
 let authorCount=0; const fmt=v=>Number(v||0).toLocaleString();
-let extractTimer=null,resultsLoading=false,downloadTimer=null;
+let extractTimer=null,resultsLoading=false,downloadTimer=null,extractPending=false;
 function toggleFilter(){const b=document.getElementById('filters'),o=b.style.display!=='none';b.style.display=o?'none':'block';document.getElementById('filter-button').textContent=o?'筛选日期':'收起筛选'}
 function useCountMode(){const n=document.getElementById('top-count'),s=document.getElementById('start-at'),e=document.getElementById('end-at'),active=Number(n.value)>0;s.disabled=active;e.disabled=active;if(active){s.value='';e.value=''}}
 function useDateMode(){const s=document.getElementById('start-at').value,e=document.getElementById('end-at').value;if(s||e)document.getElementById('top-count').value=''}
@@ -27,13 +27,48 @@ async function refreshProfile(id,button){button.disabled=true;button.textContent
 async function refreshUnread(){const b=document.getElementById('refresh-unread');b.disabled=true;b.textContent='读取中…';document.getElementById('author-status').textContent='正在依次读取未读取作者资料，请勿关闭程序。';try{const r=await fetch('/api/creators/refresh-unread',{method:'POST'}),j=await r.json();if(!r.ok)throw new Error(j.error||'读取失败');document.getElementById('author-status').textContent=`本次读取 ${j.total} 位：成功 ${j.refreshed} 位，未读取 ${j.failed.length} 位。`;await loadAuthors()}catch(e){document.getElementById('author-status').textContent=e.message;showToast(e.message,'error');b.disabled=false;b.textContent='一键读取未读取资料'}}
 async function addAuthors(){const u=document.getElementById('author-urls').value.trim();if(!u)return showToast('请粘贴或导入作者主页链接','warning');const b=document.getElementById('add-authors');b.disabled=true;b.textContent='添加中…';document.getElementById('author-status').textContent='正在打开作者主页并读取资料…';try{const r=await fetch('/api/creators/add-profile',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({urls:u})}),j=await r.json();if(!r.ok)throw new Error(j.error||'添加失败');document.getElementById('author-urls').value='';document.getElementById('author-status').textContent=`已添加 ${j.added.length} 位作者`+(j.failed?.length?`；${j.failed.length} 项资料未完整读取`:'');await loadAuthors()}catch(e){document.getElementById('author-status').textContent=e.message;showToast(e.message,'error')}finally{b.disabled=false;b.textContent='添加作者主页'}}
 async function clearAuthors(){if(!authorCount)return;if(!confirm(`确定清空 ${authorCount} 位作者主页及其作者作品结果吗？话题提取结果不会删除。`))return;const b=document.getElementById('clear-authors');b.disabled=true;b.textContent='清空中…';try{const r=await fetch('/api/creators',{method:'DELETE'}),j=await r.json();if(!r.ok)throw new Error(j.error||'清空失败');document.getElementById('author-urls').value='';document.querySelector('#result-table tbody').innerHTML='<tr><td colspan="8" style="color:var(--text-secondary)">作者主页列表已清空。</td></tr>';document.getElementById('author-status').textContent=`已清空 ${j.creators||0} 位作者和 ${j.videos||0} 条作者作品。`;showToast('主页列表已清空','success');await loadAuthors()}catch(e){document.getElementById('author-status').textContent=e.message;showToast(e.message,'error')}finally{b.textContent='清空主页列表';b.disabled=!authorCount}}
-async function extractAll(){const s=document.getElementById('start-at').value,e=document.getElementById('end-at').value,limit=document.getElementById('top-count').value;if(!authorCount)return showToast('请先添加作者主页','warning');if(!limit&&(!s||!e))return showToast('请选择日期范围，或填写每位作者前几条','warning');const b=document.getElementById('extract');b.disabled=true;b.textContent='提取中…';document.querySelector('#result-table tbody').innerHTML='<tr><td colspan="8">已清空上次结果，正在提取本次作品…</td></tr>';document.getElementById('status').textContent='正在清空上次结果并准备提取…';extractTimer=setInterval(updateExtractStatus,1000);try{const r=await fetch('/api/extract',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({start_at:s,end_at:e,max_per_creator:limit})}),j=await r.json();if(!r.ok)throw new Error(j.error||'提取失败');document.getElementById('status').textContent=`完成：本次入库 ${j.total} 条作品`+(j.failed?.length?`；${j.failed.length} 位作者未提取，请在浏览器确认登录或验证后重试。`:'');await loadResults(s,e)}catch(x){document.getElementById('status').textContent=x.message;showToast(x.message,'error')}finally{clearInterval(extractTimer);extractTimer=null;b.disabled=false;b.textContent='全部提取'}}
-async function updateExtractStatus(){try{const r=await fetch('/api/extract-status'),s=await r.json();if(s.running){document.getElementById('status').textContent=`正在提取 ${s.current}/${s.total}：${s.creator}；${s.message}（累计 ${s.found||0} 条）`;const start=document.getElementById('start-at').value,end=document.getElementById('end-at').value;if(start&&end&&!resultsLoading){resultsLoading=true;try{await loadResults(start,end)}finally{resultsLoading=false}}}}catch(e){}}
+async function extractAll(){
+  const s=document.getElementById('start-at').value,e=document.getElementById('end-at').value,limit=document.getElementById('top-count').value;
+  if(!authorCount)return showToast('请先添加作者主页','warning');
+  if(!limit&&(!s||!e))return showToast('请选择日期范围，或填写每位作者前几条','warning');
+  const b=document.getElementById('extract');
+  extractPending=true;b.disabled=true;b.textContent='提取中…';
+  syncExtractionPause({running:true,paused:false});
+  document.querySelector('#result-table tbody').innerHTML='<tr><td colspan="8">已清空上次结果，正在提取本次作品…</td></tr>';
+  document.getElementById('status').textContent='正在清空上次结果并准备提取…';
+  extractTimer=setInterval(updateExtractStatus,1000);
+  try{
+    const r=await fetch('/api/extract',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({start_at:s,end_at:e,max_per_creator:limit})}),j=await r.json();
+    if(!r.ok)throw new Error(j.error||'提取失败');
+    document.getElementById('status').textContent=`完成：本次入库 ${j.total} 条作品`+(j.failed?.length?`；${j.failed.length} 位作者未提取，请在浏览器确认登录或验证后重试。`:'');
+    await loadResults(s,e);
+  }catch(x){document.getElementById('status').textContent=x.message;showToast(x.message,'error')}
+  finally{extractPending=false;clearInterval(extractTimer);extractTimer=null;syncExtractionPause({running:false,paused:false});b.disabled=!authorCount;b.textContent='全部提取'}
+}
+async function updateExtractStatus(){
+  try{
+    const r=await fetch('/api/extract-status'),s=await r.json();
+    syncExtractionPause(s);
+    if(s.running){
+      document.getElementById('extract').disabled=true;
+      document.getElementById('extract').textContent='提取中…';
+      if(!extractTimer)extractTimer=setInterval(updateExtractStatus,1000);
+      const prefix=s.paused?'已请求暂停，等待当前请求完成':'正在提取';
+      document.getElementById('status').textContent=`${prefix} ${s.current}/${s.total}：${s.creator}；${s.message}（累计 ${s.found||0} 条）`;
+      const start=document.getElementById('start-at').value,end=document.getElementById('end-at').value;
+      if(start&&end&&!resultsLoading){resultsLoading=true;try{await loadResults(start,end)}finally{resultsLoading=false}}
+    }else if(extractTimer&&!extractPending){
+      clearInterval(extractTimer);extractTimer=null;
+      const button=document.getElementById('extract');button.disabled=!authorCount;button.textContent='全部提取';
+      document.getElementById('status').textContent=s.message||'提取已结束';
+    }
+  }catch(e){}
+}
 function updateDownloadButton(){const selected=document.querySelectorAll('.result-select:checked').length,b=document.getElementById('download-selected');b.disabled=!selected;b.textContent=selected?`下载勾选视频（${selected}）`:'下载勾选视频'}
 async function loadResults(s,e){const r=await fetch(`/api/results?start_at=${encodeURIComponent(s)}&end_at=${encodeURIComponent(e)}`),j=await r.json();if(!r.ok)throw new Error(j.error||'读取结果失败');const b=document.querySelector('#result-table tbody');b.innerHTML='';if(!j.rows.length)b.innerHTML='<tr><td colspan="8">正在等待符合条件的作品…</td></tr>';for(const x of j.rows){const tr=document.createElement('tr'),select=document.createElement('td'),box=document.createElement('input');box.type='checkbox';box.className='result-select';box.value=x.id;box.checked=true;box.onchange=updateDownloadButton;select.appendChild(box);tr.appendChild(select);[x.author_douyin_id||'-',x.publish_time,x.title||'-',fmt(x.view_count),fmt(x.like_count),fmt(x.comment_count)].forEach(v=>{const td=document.createElement('td');td.textContent=v;tr.appendChild(td)});const td=document.createElement('td'),a=document.createElement('a');a.href=x.url;a.target='_blank';a.rel='noopener';a.textContent='打开作品';td.appendChild(a);tr.appendChild(td);b.appendChild(tr)}const query=`start_at=${encodeURIComponent(s)}&end_at=${encodeURIComponent(e)}`,hasRows=!!j.rows.length;const csv=document.getElementById('export'),xlsx=document.getElementById('export-xlsx'),download=document.getElementById('download-selected');csv.href=`/api/videos/export?${query}`;xlsx.dataset.start=s;xlsx.dataset.end=e;csv.style.display=hasRows?'inline-flex':'none';xlsx.style.display=hasRows?'inline-flex':'none';download.style.display=hasRows?'inline-flex':'none';updateDownloadButton()}
 async function pollDownload(){try{const r=await fetch('/api/download-status'),d=await r.json();if(d.running){document.getElementById('status').textContent=`正在下载 ${d.done+d.failed}/${d.total}：${d.message}`;return}if(downloadTimer){clearInterval(downloadTimer);downloadTimer=null;document.getElementById('status').textContent=d.message;showToast(d.message,d.failed?'warning':'success')}}catch(e){}}
 async function downloadSelected(){const ids=[...document.querySelectorAll('.result-select:checked')].map(x=>x.value);if(!ids.length)return;const b=document.getElementById('download-selected');b.disabled=true;b.textContent='请选择保存位置…';try{const r=await fetch('/api/downloads/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({source:'author',ids})}),j=await r.json();if(!r.ok)throw new Error(j.error||'下载任务启动失败');if(j.cancelled){document.getElementById('status').textContent='已取消选择保存位置';return}document.getElementById('status').textContent=`正在下载 ${j.total} 条视频到：${j.path}`;downloadTimer=setInterval(pollDownload,800)}catch(e){showToast(e.message,'error');document.getElementById('status').textContent=e.message}finally{updateDownloadButton()}}
 async function exportXlsx(){const b=document.getElementById('export-xlsx');b.disabled=true;b.textContent='正在选择位置…';try{const r=await fetch('/api/videos/export-xlsx/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({start_at:b.dataset.start||'',end_at:b.dataset.end||''})}),j=await r.json();if(!r.ok)throw new Error(j.error||'导出失败');if(j.cancelled){document.getElementById('status').textContent='已取消导出';return}document.getElementById('status').textContent=`XLSX 已导出：${j.path}`;showToast('XLSX 已保存','success')}catch(e){showToast(e.message,'error')}finally{b.disabled=false;b.textContent='导出 XLSX'}}
-loadAuthors();
+loadAuthors().then(updateExtractStatus);
 </script>
 {% endblock %}

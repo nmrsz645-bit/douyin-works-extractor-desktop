@@ -9,6 +9,7 @@ from playwright.async_api import async_playwright, Page
 from config_manager import load_config
 from spider import SESSION_DIR, DouyinSpider
 from topic_spider import DouyinTopicSpider
+from extraction_pause import wait_if_paused
 
 logger = logging.getLogger(__name__)
 
@@ -18,9 +19,10 @@ class DouyinSingleVideoSpider:
 
     _VIDEO_ID_RE = re.compile(r"/(?:video|note)/(\d+)")
 
-    def __init__(self, on_video=None, on_progress=None):
+    def __init__(self, on_video=None, on_progress=None, pause_gate=None):
         self.on_video = on_video
         self.on_progress = on_progress
+        self.pause_gate = pause_gate
         self.results: list[dict] = []
         self.failed: list[dict] = []
 
@@ -123,6 +125,7 @@ class DouyinSingleVideoSpider:
             page = context.pages[0] if context.pages else await context.new_page()
             try:
                 for raw_url in urls:
+                    await wait_if_paused(self.pause_gate)
                     video, error = await self._fetch_one(page, raw_url)
                     if video:
                         self.results.append(video)

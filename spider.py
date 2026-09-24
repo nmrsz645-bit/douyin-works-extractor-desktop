@@ -8,6 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from playwright.async_api import async_playwright, Page
+from extraction_pause import wait_if_paused
 
 SESSION_DIR = Path(os.environ.get("DOUYIN_SESSION_DIR", str(Path(__file__).parent / "douyin_session")))
 
@@ -67,7 +68,7 @@ class DouyinSpider:
     def __init__(self, headless: bool | None = None, max_scrolls: int | None = None,
                  page_load_wait: int | None = None, idle_limit: int | None = None,
                  start_ts: int | None = None, end_ts: int | None = None,
-                 on_videos=None, max_videos: int | None = None):
+                 on_videos=None, max_videos: int | None = None, pause_gate=None):
         from config_manager import load_config
         cfg = load_config()
         s = cfg["spider"]
@@ -81,6 +82,7 @@ class DouyinSpider:
         self.target_sec_uid = ""
         # 每收到一页符合条件的作品就通知调用方；桌面版借此即时入库、即时显示。
         self.on_videos = on_videos
+        self.pause_gate = pause_gate
         self.videos: list[Video] = []
         self.profile: Profile | None = None
         self._seen_ids: set[str] = set()
@@ -319,6 +321,7 @@ class DouyinSpider:
 
             # 不以首屏接口命中作为前提：有些主页首屏是预渲染的，实际滚动后才发作品列表请求。
             for i in range(self.max_scrolls):
+                await wait_if_paused(self.pause_gate)
                 if self._stopped:
                     break
                 if await self._cool_down_if_needed(page):

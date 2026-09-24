@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from playwright.async_api import async_playwright, Page
+from extraction_pause import wait_if_paused
 
 from spider import SESSION_DIR, DouyinSpider
 
@@ -32,7 +33,7 @@ class DouyinTopicSpider:
 
     def __init__(self, topic_input: str, *, start_ts: int | None = None,
                  end_ts: int | None = None, max_videos: int | None = None,
-                 on_videos=None, headless: bool = False):
+                 on_videos=None, headless: bool = False, pause_gate=None):
         from config_manager import load_config
         cfg = load_config()["spider"]
         self.topic, self.url = normalise_topic_input(topic_input)
@@ -40,6 +41,7 @@ class DouyinTopicSpider:
         self.end_ts = end_ts
         self.max_videos = max_videos
         self.on_videos = on_videos
+        self.pause_gate = pause_gate
         self.headless = headless
         self.max_scrolls = 80
         # 话题搜索在前几次滚动便应返回列表；避免接口未识别时长时间空滑。
@@ -184,6 +186,7 @@ class DouyinTopicSpider:
             try:
                 await page.goto(self.url, wait_until="domcontentloaded")
                 for _ in range(self.max_scrolls):
+                    await wait_if_paused(self.pause_gate)
                     if self._stopped:
                         break
                     if await self._cool_down_if_needed(page):
