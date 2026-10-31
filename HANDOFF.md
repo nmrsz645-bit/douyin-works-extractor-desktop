@@ -3,6 +3,7 @@
 本文件对应 **v1.1.22**。该版 Release 标签 `v1.1.22` 指向源码提交
 `f56424a9434bb3ee305d4e05fac36c46c81b453b`；后续文档提交不会移动旧标签或替换旧安装包。
 接手时先检查 `version.json`、远端 `main`、最新 Release 和公开更新清单，不能仅凭本文件判断未来的最新版。
+新 Windows 电脑克隆、测试、组包、GitHub/OSS/下载站步骤以 [发布指南](docs/RELEASE-GUIDE.md) 为准；本文件负责架构与修改入口。
 
 ## 用途与运行架构
 
@@ -93,6 +94,8 @@ $env:LOCALAPPDATA = Join-Path $env:TEMP 'dwe-dev-profile'
 本仓库不应存放访问密钥、临时 token、真实 `.env` 或业务数据。不要扩大凭证权限来处理发布失败。
 
 ## 发布和升级边界
+
+可操作命令、对象路径、网站卡片和回滚细节统一维护在 [docs/RELEASE-GUIDE.md](docs/RELEASE-GUIDE.md)。
 
 1. 在新功能完成并验证后，更新 `version.json`，检查源码、提交历史与发布 ZIP 中没有密钥、Cookie、会话、数据库、日志或个人资料。
 2. 在隔离环境运行测试并构建完整 Windows 包；核对 `app/version.json`、EXE、浏览器、启动器和 SHA-256。

@@ -9,6 +9,7 @@
 | 完整版（新用户下载） | [v1.1.22 Windows x64 ZIP](https://github.com/nmrsz645-bit/douyin-works-extractor-desktop/releases/download/v1.1.22/douyin-works-extractor-1.1.22-windows-x64.zip) |
 | 发布说明与历史版本 | [GitHub Releases](https://github.com/nmrsz645-bit/douyin-works-extractor-desktop/releases) |
 | 开发与发布交接 | [HANDOFF.md](HANDOFF.md) |
+| 新 Windows 电脑接手、更新与网站发布 | [docs/RELEASE-GUIDE.md](docs/RELEASE-GUIDE.md) |
 
 该完整包 SHA-256：`f478f4087b94eedd8bf2f2f28c01b4718aff03be500da63c842bd7535a6ed190`。
 PowerShell 可用 `Get-FileHash .\douyin-works-extractor-1.1.22-windows-x64.zip -Algorithm SHA256` 核对。
@@ -94,7 +95,8 @@ PowerShell 可用 `Get-FileHash .\douyin-works-extractor-1.1.22-windows-x64.zip 
 源码主要入口为 `desktop_app.py`，Web/API 在 `web/app.py`，作者/话题/单作品采集分别在
 `spider.py`、`topic_spider.py`、`single_video_spider.py`，SQLite 表及迁移在 `db.py`。
 开发环境建议 Windows + Python 3.10；安装 `requirements.txt`、PyInstaller 和 Playwright Chromium。
-完整命令、配置模板、构建/发布边界、已知限制见 [HANDOFF.md](HANDOFF.md)。
+完整模块与已知限制见 [HANDOFF.md](HANDOFF.md)；新电脑接手、组包、GitHub/OSS/下载站操作和回滚步骤
+以 [发布指南](docs/RELEASE-GUIDE.md) 为准。
 
 项目保留了早期 `monitor.py`/`commands.py` CLI 和部分监控页面；它们不是当前桌面版安装入口。
 本项目仅处理你有权访问的公开内容，提取结果受抖音页面、登录态和平台规则影响。
