@@ -37,23 +37,33 @@ Get-Content .\version.json
 （下文完整组包命令按 CI 的 `pwsh` 写法）。打包界面还依赖目标电脑安装 **Microsoft .NET Framework 4.8.1 或更高版本**；
 它不是 ZIP 中的可分发 CoreCLR。新用户只需完整 ZIP 和该系统运行时，按 README 运行包根目录 `Start-App.cmd`，无需 Python。
 
-源码 `requirements.txt` 只给最低版本，**没有依赖锁文件，不能保证在新电脑按范围安装后生成与旧 ZIP 位一致的包**。
+源码 `requirements.txt` 只给最低版本，**没有带 wheel SHA-256 的依赖锁文件，不能保证在新电脑按范围安装后生成与旧 ZIP 位一致的包**。
 本轮可核对的本机直接依赖版本为：Playwright 1.63.0、PyYAML 6.0.3、FastAPI 0.141.1、Uvicorn 0.53.0、
 Jinja2 3.1.6、requests 2.34.2、zhconv 1.4.3、openpyxl 3.1.5、python-multipart 0.0.32、
-pywebview 6.2.1、PyInstaller 6.22.3、pytest 9.1.1。本机虚拟环境未装 `faster-whisper`，转录功能未验证；
-它仍列在 `requirements.txt`。交接时先保存新环境的 `pip freeze` 和浏览器目录清单，再判断是否可发布。
+pywebview 6.2.1、PyInstaller 6.22.3、pytest 9.1.1。旧本机 `.venv` 未装 `faster-whisper`；
+v1.1.22 的 [CI 构建日志](https://github.com/nmrsz645-bit/douyin-works-extractor-desktop/actions/runs/35972034374)
+安装了 `faster-whisper 1.2.1`。该次 CI 解析出的 63 个包及预装的 `setuptools 65.5.0` 记在
+[构建版本约束](ci-v1.1.22-build-constraints.txt)；它是版本记录，**不是 wheel 哈希锁或新版本通用约束**。
+交接时保存新环境的 `pip freeze` 和浏览器目录清单，再判断是否可发布。
 
 在**新建的源码检出目录**安装并做离线检查：
 
 ```powershell
 py -3.10 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt pyinstaller pytest
+.\.venv\Scripts\python.exe -m pip install --index-url https://pypi.org/simple --upgrade pip
+.\.venv\Scripts\python.exe -m pip install --index-url https://pypi.org/simple -r requirements.txt pyinstaller -c docs\ci-v1.1.22-build-constraints.txt
+.\.venv\Scripts\python.exe -m pip install --index-url https://pypi.org/simple pytest==9.1.1
+.\.venv\Scripts\python.exe -m pip check
 .\.venv\Scripts\python.exe -m playwright install chromium
 .\.venv\Scripts\python.exe -m pytest -q
 ```
 
-本轮已有环境的结果是 `16 passed, 4 skipped`；`test_web.py` 的 4 个服务冒烟项本身被标记跳过。
+2026-10-31 在另建的隔离 Windows/Python 3.10.11 环境中，按上述构建版本约束安装后，
+`pip check` 通过，`WhisperModel`、CTranslate2 4.8.2、PyAV 17.1.0、ONNX Runtime 1.23.2 和 tokenizers 0.23.2 可导入；
+离线测试为 `16 passed, 4 skipped`。PyInstaller 最小 onedir 构建完成，归档含 `faster_whisper`，
+输出含 `ctranslate2.dll` 和 ONNX Runtime 扩展。安装命令指定官方 PyPI 索引，但 pip 使用了本机缓存中的多个 wheel，
+没有逐个验证 wheel 的来源/哈希。本轮**没有下载语音模型、执行真实转录、捆绑 Chromium 或运行候选 EXE**；
+这不是完整发布包验收。`test_web.py` 的 4 个服务冒烟项本身被标记跳过。
 开发启动用独立资料目录，避免碰当前用户的正式数据：
 
 ```powershell

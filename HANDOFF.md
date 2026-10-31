@@ -45,16 +45,24 @@ CI 使用 Windows、Python **3.10**；本轮本机验证环境为 Python **3.10.
 Playwright **1.63.0**、FastAPI **0.141.1**、Uvicorn **0.53.0**、
 pywebview **6.2.1**、PyInstaller **6.22.3**、openpyxl **3.1.5**。
 源码的 `requirements.txt` 采用最低版本范围，不是锁定文件；复现旧包要核对实际依赖和 Chromium 版本。
-本机虚拟环境未装 `faster-whisper`，转录功能未在本轮验证。打包界面需要 Windows .NET Framework **4.8.1 或更高版本**。
+本机旧 `.venv` 未装 `faster-whisper`。v1.1.22 的 [CI 安装日志](https://github.com/nmrsz645-bit/douyin-works-extractor-desktop/actions/runs/35972034374)
+记录 `faster-whisper 1.2.1`；对应构建包的 PyInstaller 归档也含该模块。2026-10-31 在另建的隔离虚拟环境中，
+按 [CI 版本约束](docs/ci-v1.1.22-build-constraints.txt) 安装后，`pip check`、`WhisperModel`/二进制依赖导入、
+离线测试及最小 PyInstaller 打包通过；尚未下载模型、验证真实转录或把候选包作为正式发布包运行。
+打包界面需要 Windows .NET Framework **4.8.1 或更高版本**。
 
 在干净、隔离的源码检出目录中执行（PowerShell）：
 
 ```powershell
 py -3.10 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -r requirements.txt pyinstaller pytest
+.\.venv\Scripts\python.exe -m pip install --index-url https://pypi.org/simple -r requirements.txt pyinstaller -c docs\ci-v1.1.22-build-constraints.txt
+.\.venv\Scripts\python.exe -m pip install --index-url https://pypi.org/simple pytest==9.1.1
+.\.venv\Scripts\python.exe -m pip check
 .\.venv\Scripts\python.exe -m playwright install chromium
 .\.venv\Scripts\python.exe -m pytest -q
 ```
+
+以上约束用于复现 v1.1.22 的 CI 版本；开发新版本时应重新审查依赖兼容性，不要直接把旧约束当成新版本锁文件。
 
 开发启动建议使用独立用户资料，避免读写正在使用的正式数据：
 
@@ -121,7 +129,8 @@ v1.1.22 GitHub 完整包 SHA-256：
 - 单作品页面按首次输入顺序显示**去重后的**链接/作品；当前 `web/app.py` 会对重复 URL 去重，数据库也按作品 ID 合并。同一链接需保留多行是尚未实现的需求。
 - 抖音登录状态、验证页、接口变动或频率限制可能导致作者资料、作品详情、统计或视频地址缺失。复现时记录输入类型、时间、界面错误与 `desktop.log`，避免分享 Cookie。
 - `test_web.py` 的 4 个服务冒烟测试在文件中显式跳过；本轮离线测试为 `16 passed, 4 skipped`，未做真实抖音提取。
-- 本地 `build_desktop_release.bat` 的浏览器修订号硬编码；未来升级 Playwright 后需同步检查。`faster-whisper` 在本轮本机虚拟环境缺失，转录未验证。
+- 本地 `build_desktop_release.bat` 的浏览器修订号硬编码；未来升级 Playwright 后需同步检查。旧 `.venv` 缺 `faster-whisper`；隔离环境只验证导入和打包，真实语音转录仍未验证。
+- 缺少 `faster-whisper` 时，作者提取会跳过自动转录；手动转录路径可能把“Whisper 模型未加载”占位文字存入数据库。使用转录功能前应检查模型和依赖，不能把占位文字当识别结果。
 - `/settings` 与清理浏览器缓存 API 仍存在，但主导航只链接作者、话题、单作品页，普通用户没有设置页入口；若要开放入口，先明确配置与会话清理的产品行为。
 
 可直接复现的边界：
