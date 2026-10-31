@@ -10,7 +10,7 @@
 [验收与回滚](https://github.com/nmrsz645-bit/software-download-center/blob/docs-cross-pc-handoff/docs/PUBLISHING.md#verify-rollback)和
 [凭证](https://github.com/nmrsz645-bit/software-download-center/blob/docs-cross-pc-handoff/docs/PUBLISHING.md#credentials)。本项目的对象、命令和限制以下文为准。
 
-> 本文件是**未来发布操作手册**。本次文档补齐没有构建新版本、推送标签、创建 Release、上传 OSS、改下载站或执行生产上传命令。`git push` 文档提交不等于客户端已更新。
+> 本文件是**未来发布操作手册**。本机仅建立了与已发布版本不同字节的隔离候选；没有构建新版本、推送标签、创建 Release、上传 OSS、改下载站或执行生产上传命令。`git push` 文档提交不等于客户端已更新。
 
 ## 1. 仓库、正式版和测试版
 
@@ -62,8 +62,9 @@ py -3.10 -m venv .venv
 `pip check` 通过，`WhisperModel`、CTranslate2 4.8.2、PyAV 17.1.0、ONNX Runtime 1.23.2 和 tokenizers 0.23.2 可导入；
 离线测试为 `16 passed, 4 skipped`。PyInstaller 最小 onedir 构建完成，归档含 `faster_whisper`，
 输出含 `ctranslate2.dll` 和 ONNX Runtime 扩展。安装命令指定官方 PyPI 索引，但 pip 使用了本机缓存中的多个 wheel，
-没有逐个验证 wheel 的来源/哈希。本轮**没有下载语音模型、执行真实转录、捆绑 Chromium 或运行候选 EXE**；
-这不是完整发布包验收。`test_web.py` 的 4 个服务冒烟项本身被标记跳过。
+没有逐个验证 wheel 的来源/哈希。最小 onedir 构建没有捆绑 Chromium；后续用本机已匹配的浏览器组件
+组装了完整候选并直启 EXE 做隔离的本地页面检查，见下文。**没有下载语音模型或执行真实转录**。
+`test_web.py` 的 4 个服务冒烟项本身被标记跳过。
 开发启动用独立资料目录，避免碰当前用户的正式数据：
 
 ```powershell
@@ -131,6 +132,29 @@ Get-FileHash "$stage\updates\douyin-works-extractor-update-$version.zip" -Algori
 
 `--dry-run` 只校验待上传文件与清单，不触网写 OSS。必须另外检查 ZIP 内是否有 `.env`、Cookie、
 浏览器资料、数据库、日志、个人资料或真实配置，并在独立用户数据目录做启动检查。
+
+### 2026-10-31 本机隔离完整候选（未发布）
+
+Playwright 1.63.0 的 `browsers.json` 要求 Chromium `1243`、headless shell `1243`、ffmpeg `1011`。
+本机标准 `%LOCALAPPDATA%\ms-playwright` 缓存有这三个目录及安装完成标记；三个核心 EXE 的 SHA-256
+分别与已解压的 v1.1.22 正式完整包相同。只复制这三个浏览器组件目录，不复制 `.links`、浏览器用户资料、
+登录态、业务数据或旧安装目录。候选程序沿用上文隔离 PyInstaller 产物，另拷贝启动/更新脚本与
+`app/version.json`，输出在本机 `C:\软件\作品提取-handoff-build\full-candidate-v1.1.22`。
+
+| 本机候选 ZIP | 大小 | SHA-256 |
+| --- | ---: | --- |
+| `candidate-app-update.zip` | 478942737 字节 | `a6d8f033bd5ec7f7f812c5c380cbf60bf9e9a5c5d38e5d24c01fd7d6ae6df8a4` |
+| `candidate-full-package.zip` | 479138485 字节 | `e4e8cf71abd4c0b97cbaf7dd67a5350469cb67ece1e75506236829dd063232cc` |
+
+两份 ZIP 的 `app/version.json` 均为 1.1.22；完整包含 `Start-App.cmd`、`Update-App.ps1`，
+更新包以 `app/` 为顶层。静态校验核对了浏览器 EXE、CTranslate2、PyAV、tokenizers 和 ONNX Runtime 文件、
+ZIP CRC、排除用户资料路径。运行真实 `Prepare-DomesticRelease.ps1` 时输出到独立 `prepare-output-do-not-upload`，
+把 `OssBaseUrl` 设为 `https://example.invalid/handoff-only`；其本地清单哈希与两份 ZIP 一致。
+候选 EXE 直接在**空隔离** `%LOCALAPPDATA%` 中启动，本地首页返回 HTTP 200，随后停止测试进程；
+没有运行 `Start-App.cmd` 或检查公网更新。
+
+**这些候选与 v1.1.22 已发布 ZIP 的字节和 SHA-256 均不同，绝不能作为同版本资产上传或覆盖 OSS。**
+这次检查没有真实抖音提取、语音模型/转录、旧版升级、另一台电脑或正式用户数据验收。
 
 ## 4. GitHub Release、OSS 和客户端更新
 

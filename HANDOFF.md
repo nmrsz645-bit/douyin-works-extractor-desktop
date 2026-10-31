@@ -48,7 +48,8 @@ pywebview **6.2.1**、PyInstaller **6.22.3**、openpyxl **3.1.5**。
 本机旧 `.venv` 未装 `faster-whisper`。v1.1.22 的 [CI 安装日志](https://github.com/nmrsz645-bit/douyin-works-extractor-desktop/actions/runs/35972034374)
 记录 `faster-whisper 1.2.1`；对应构建包的 PyInstaller 归档也含该模块。2026-10-31 在另建的隔离虚拟环境中，
 按 [CI 版本约束](docs/ci-v1.1.22-build-constraints.txt) 安装后，`pip check`、`WhisperModel`/二进制依赖导入、
-离线测试及最小 PyInstaller 打包通过；尚未下载模型、验证真实转录或把候选包作为正式发布包运行。
+离线测试及最小 PyInstaller 打包通过；后续用匹配的浏览器缓存组装完整候选，静态验包并在空隔离资料目录
+直启 EXE 验证本地首页 HTTP 200。尚未下载模型、验证真实转录或把候选包作为正式发布包运行。
 打包界面需要 Windows .NET Framework **4.8.1 或更高版本**。
 
 在干净、隔离的源码检出目录中执行（PowerShell）：
@@ -111,7 +112,7 @@ $env:LOCALAPPDATA = Join-Path $env:TEMP 'dwe-dev-profile'
 4. 此工作流**不会创建 GitHub Release 或上传其附件**；需另行创建 Release、上传完整包和更新包，并核对 GitHub 附件的大小及 SHA-256。保留已有版本资产不覆盖。OSS 必须先上传不可变 ZIP，再更新 `latest.json`、`latest.js`；公开校验值要与文件一致。
 5. 在独立旧版安装目录验证“启动器提示 → 下载 → 校验 → 替换 `app/` → 启动”，并确认 `%LOCALAPPDATA%` 数据未变化。
 
-**本轮只是为 v1.1.22 补文档：不移动 `v1.1.22` 标签、不重打包、不修改 OSS 或下载站。**
+**后续仅在本机独立目录重建了候选包；不移动 `v1.1.22` 标签、不替换正式 ZIP、不修改 OSS 或下载站。**
 v1.1.22 GitHub 完整包 SHA-256：
 `f478f4087b94eedd8bf2f2f28c01b4718aff03be500da63c842bd7535a6ed190`；
 更新包 SHA-256：`aa1b80c3ea0db23b5ebbc0e8f18912070473224f7fc0d4c5b9e7935a7bf7382f`。
@@ -129,7 +130,7 @@ v1.1.22 GitHub 完整包 SHA-256：
 - 单作品页面按首次输入顺序显示**去重后的**链接/作品；当前 `web/app.py` 会对重复 URL 去重，数据库也按作品 ID 合并。同一链接需保留多行是尚未实现的需求。
 - 抖音登录状态、验证页、接口变动或频率限制可能导致作者资料、作品详情、统计或视频地址缺失。复现时记录输入类型、时间、界面错误与 `desktop.log`，避免分享 Cookie。
 - `test_web.py` 的 4 个服务冒烟测试在文件中显式跳过；本轮离线测试为 `16 passed, 4 skipped`，未做真实抖音提取。
-- 本地 `build_desktop_release.bat` 的浏览器修订号硬编码；未来升级 Playwright 后需同步检查。旧 `.venv` 缺 `faster-whisper`；隔离环境只验证导入和打包，真实语音转录仍未验证。
+- 本地 `build_desktop_release.bat` 的浏览器修订号硬编码；未来升级 Playwright 后需同步检查。旧 `.venv` 缺 `faster-whisper`；隔离环境完成导入、候选组包和本地 HTTP 检查，真实语音转录仍未验证。
 - 缺少 `faster-whisper` 时，作者提取会跳过自动转录；手动转录路径可能把“Whisper 模型未加载”占位文字存入数据库。使用转录功能前应检查模型和依赖，不能把占位文字当识别结果。
 - `/settings` 与清理浏览器缓存 API 仍存在，但主导航只链接作者、话题、单作品页，普通用户没有设置页入口；若要开放入口，先明确配置与会话清理的产品行为。
 
