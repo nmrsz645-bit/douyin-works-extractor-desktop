@@ -1,399 +1,100 @@
-# 抖音博主监控系统
-
-定时抓取抖音博主视频数据，追踪点赞、评论、分享、播放量等互动指标的变化趋势。
-
-## 功能
-
-- **博主管理** — 添加/删除/重命名监控目标，支持多种输入格式
-- **数据采集** — Playwright 无头浏览器模拟滚动，拦截 API 响应收集完整视频列表
-- **评论抓取** — 视频详情页拦截 + fetch 翻页，按点赞/回复数过滤优质评论
-- **趋势追踪** — 每次抓取生成独立快照，对比历史数据发现涨粉/爆款
-- **语音转录** — faster-whisper 离线转写视频语音为文字（简体中文）
-- **Web 面板** — FastAPI + Jinja2 页面，概览仪表盘、视频列表、趋势图 (Chart.js)、系统配置
-- **CLI 工具** — 命令行增删查改、单次抓取、定时调度、CSV 导出
-- **多格式输入** — 支持纯 sec_uid、主页链接、短链接 (v.douyin.com)、分享文案
-- **配置管理** — 所有参数可通过 Web 页面或 config.yaml 调整，无需改代码
-
-## 技术栈
-
-| 层 | 技术 |
-|---|------|
-| 数据采集 | Python 3.8+、Playwright (Chromium)、asyncio |
-| 数据存储 | SQLite (WAL 模式, 外键) |
-| 语音转录 | faster-whisper (large-v3-turbo)、ffmpeg、zhconv |
-| Web 后端 | FastAPI、Jinja2、Uvicorn |
-| Web 前端 | 原生 HTML/CSS/JS、Chart.js 4.x (CDN) |
-| 配置 | YAML |
-
-## 项目结构
-
-```
-douyin-monitor/
-├── monitor.py            # CLI 入口（路由到 commands.py）
-├── commands.py           # 命令实现（add/remove/list/run/report/export/comments 等）
-├── spider.py             # 抖音数据采集模块 (Playwright 滚动+API拦截)
-├── comment_spider.py     # 评论区采集模块 (Playwright 拦截+fetch翻页)
-├── db.py                 # SQLite 数据层（CRUD、快照、统计、批量查询）
-├── utils.py              # URL 解析工具（sec_uid 提取、短链接重定向）
-├── config_manager.py     # 统一配置管理（加载/保存/合并默认值）
-├── transcriber.py        # 语音转录模块（视频下载→音频提取→Whisper 转文本）
-├── check_data.py         # JSON 数据完整性检查工具
-├── test_web.py           # Web API 冒烟测试 (pytest)
-├── config.yaml           # 配置文件（博主列表、调度、采集、评论、转录等）
-├── requirements.txt      # Python 依赖
-├── SKILL_CODE_AUDIT.md   # 代码审计工作流 Skill 文档
-├── data/                 # SQLite 数据库文件
-├── exports/              # CSV 导出目录
-├── douyin_session/       # Playwright 持久化浏览器会话（登录态）
-└── web/
-    ├── app.py            # FastAPI Web 应用
-    ├── static/
-    │   └── style.css     # 页面样式
-    └── templates/
-        ├── base.html         # 布局基模板（导航栏）
-        ├── dashboard.html    # 概览仪表盘
-        ├── creators.html     # 博主管理（增删改查）
-        ├── videos.html       # 视频列表（搜索/排序/分页）
-        ├── video_detail.html # 视频详情（快照历史、评论抓取、转录文本）
-        ├── trends.html       # 趋势图（Chart.js 折线图）
-        └── settings.html     # 系统配置管理页面
-```
-
-## 数据库 Schema
-
-### creators — 博主
-
-| 列 | 类型 | 说明 |
-|----|------|------|
-| id | INTEGER PK | 自增主键 |
-| name | TEXT | 博主名称（支持双击改名） |
-| sec_uid | TEXT UNIQUE | 抖音用户唯一标识 |
-| platform | TEXT | 平台 (默认 `douyin`) |
-| enabled | INTEGER | 是否启用监控 (1/0) |
-| added_at | TIMESTAMP | 添加时间 |
-| last_fetched_at | TIMESTAMP | 最近一次抓取时间 |
-
-### videos — 视频
-
-| 列 | 类型 | 说明 |
-|----|------|------|
-| id | INTEGER PK | 自增主键 |
-| creator_id | INTEGER FK | 关联 creators.id |
-| video_id | TEXT | 抖音视频 ID |
-| title | TEXT | 视频标题 |
-| cover_url | TEXT | 封面图 URL |
-| video_url | TEXT | 视频播放地址 |
-| duration_ms | INTEGER | 时长 (毫秒) |
-| create_time | INTEGER | 发布时间 (Unix 时间戳) |
-| hashtags | TEXT | 标签列表 (JSON 数组) |
-| first_seen_at | TIMESTAMP | 首次发现时间 |
-
-UNIQUE(creator_id, video_id)
-
-### snapshots — 互动快照
-
-| 列 | 类型 | 说明 |
-|----|------|------|
-| id | INTEGER PK | 自增主键 |
-| video_id | INTEGER FK | 关联 videos.id |
-| like_count | INTEGER | 点赞数 |
-| comment_count | INTEGER | 评论数 |
-| share_count | INTEGER | 分享数 |
-| view_count | INTEGER | 播放量 (Web 端通常为 0) |
-| fetched_at | TIMESTAMP | 抓取时间 |
+# 抖音作品提取（Windows 桌面版）
 
-### transcripts — 转录文本
+当前稳定版：**v1.1.22**。程序可从作者主页、话题和单个作品链接提取公开可见的作品资料，
+导出 XLSX，并将可访问的视频保存到按作者归档的目录。界面在 Windows 原生窗口中打开；
+程序只在本机 `127.0.0.1` 启动一个随机端口的服务。
 
-| 列 | 类型 | 说明 |
-|----|------|------|
-| id | INTEGER PK | 自增主键 |
-| video_id | INTEGER FK | 关联 videos.id |
-| full_text | TEXT | 完整转录文本（简体中文） |
-| created_at | TIMESTAMP | 转录时间 |
+| 入口 | 链接 |
+| --- | --- |
+| 完整版（新用户下载） | [v1.1.22 Windows x64 ZIP](https://github.com/nmrsz645-bit/douyin-works-extractor-desktop/releases/download/v1.1.22/douyin-works-extractor-1.1.22-windows-x64.zip) |
+| 发布说明与历史版本 | [GitHub Releases](https://github.com/nmrsz645-bit/douyin-works-extractor-desktop/releases) |
+| 开发与发布交接 | [HANDOFF.md](HANDOFF.md) |
 
-### comments — 评论区数据
+该完整包 SHA-256：`f478f4087b94eedd8bf2f2f28c01b4718aff03be500da63c842bd7535a6ed190`。
+PowerShell 可用 `Get-FileHash .\douyin-works-extractor-1.1.22-windows-x64.zip -Algorithm SHA256` 核对。
+此哈希对应已发布的 v1.1.22 原包；不要把源码目录的旧 `dist/` 当成最新版。
 
-| 列 | 类型 | 说明 |
-|----|------|------|
-| id | INTEGER PK | 自增主键 |
-| video_id | INTEGER FK | 关联 videos.id |
-| comment_id | TEXT | 抖音评论 cid |
-| text | TEXT | 评论正文 |
-| digg_count | INTEGER | 点赞数 |
-| reply_count | INTEGER | 子回复总数 |
-| user_name | TEXT | 评论者昵称 |
-| ip_label | TEXT | IP 属地标签 |
-| create_time | INTEGER | 评论时间 (Unix 时间戳) |
-| first_seen | TIMESTAMP | 首次入库时间 |
-| last_seen | TIMESTAMP | 最近一次出现时间 |
+## 安装与首次配置
 
-UNIQUE(video_id, comment_id)
+1. 在 Windows x64 电脑下载**完整包**，完整解压到可写目录，保留包内的 `app/`、`Start-App.cmd` 和 `Update-App.ps1`。
+2. 双击解压后根目录的 **`Start-App.cmd`**。它先检查更新，再启动 `app/抖音作品提取.exe`；首次启动可能需要稍等浏览器内核加载。
+3. 如果窗口提示缺少运行环境，安装或修复 [Microsoft .NET Framework 4.8.1](https://dotnet.microsoft.com/download/dotnet-framework) 后重试。
+4. 界面顶部有“扫码登录抖音”。需要登录时，在程序打开的抖音窗口按页面提示扫码；登录资料只保存在本机。
+5. 无需申请 API Key，也无需填写密码或把 Cookie 发给程序维护者。作者、话题和作品链接从你有权访问的抖音网页复制。
 
-> 抓取时自动过滤：仅保留**点赞数 > 0 且有回复**的评论。`delete_absent_comments()` 在每次抓取后清理已被作者删除的评论。
+**不要只复制 EXE，也不要运行源码根目录的 `Start-App.cmd`。** 源码目录没有发布包所需的 `app/`。
+更新包 ZIP 供启动器使用；新安装请选择完整版 ZIP。
 
-每次抓取都会新增快照，通过对比相邻快照计算增长趋势。
+## 主要操作
 
-## 采集原理
+### 作者提取
 
-### Cookie 依赖
+在“作者提取”页，每行粘贴一个作者主页链接，或导入首列为主页链接的 `.xlsx`/`.csv`，
+点击“添加作者主页”。程序会读取作者资料；未读取到资料时可点“刷新资料”或“一键读取未读取资料”。
+然后选择**发布时间范围**，或填写“每位作者提取前几条”，点击“全部提取”。
+两种筛选方式互斥。结果会逐步显示作者抖音号、发布时间、标题、播放量、点赞数、评论总数和作品链接。
+可导出 CSV 或通过“导出 XLSX”选择保存位置。
 
-抓取模块不直接调用抖音 API，而是用 Playwright 打开博主主页，拦截页面自动发出的 API 请求。
+### 话题提取
 
-```text
-用户浏览器             抖音服务器
-    │                      │
-    ├─ GET /user/SEC_UID ─→│   (带上 Cookie)
-    │←─ HTML 页面 ─────────┤
-    │                      │
-    ├─ 页面 JS 自动发请求 ──→│
-    │  /aweme/v1/web/aweme/post/
-    │  (签名/参数由页面 JS 生成)
-    │←─ JSON (视频列表) ────┤   ← spider 拦截这个响应
-```
+在“话题提取”页输入 `#话题名` 或话题链接。可选“最新前 N 条”，也可用日期范围并填写该范围的提取上限
+（1–1000 条）。点击“开始提取”，结果逐步显示话题、作者和作品数据；可导出 XLSX。
 
-抖音的 `/aweme/v1/web/aweme/post/` 接口**必须携带有效的登录 Cookie** 才会返回视频数据，未登录状态下抖音只返回公开页面的少量信息。
+### 单作品提取
 
-### 会话持久化
+在“单作品提取”页，每行粘贴一条作品链接；分享文案中的抖音链接也可识别。
+一次最多 1000 条。结果按**首次输入顺序**显示成功读取的不同作品，并可导出 XLSX。
+当前版本会合并重复 URL 或重复作品 ID；如果需要同一作品重复出现在结果中，当前版本不支持。
 
-Playwright 使用 `launch_persistent_context` 将浏览器状态（Cookie、LocalStorage、IndexedDB）持久化到 `douyin_session/` 目录。每次抓取复用同一会话，无需重复登录。
+### 暂停、导出和视频下载
 
-```
-douyin_session/
-├── Default/
-│   ├── Cookies              ← 登录 Cookie 存储在这里
-│   ├── Local Storage/
-│   ├── IndexedDB/
-│   └── Network/
-└── ...
-```
+三个提取页在任务运行时都有“暂停提取 / 继续提取”。暂停会在**当前网络请求完成后的检查点**生效；
+已取得的结果保留。关闭程序不会保存待继续的任务进度。暂停按钮不控制视频下载。
 
-### Cookie 失效与续期
+结果行默认勾选，可取消不需要的视频，再点“下载勾选视频”并选择保存文件夹。
+下载队列会依次尝试抖音页面返回的最高码率可访问地址。没有视频地址的勾选项会被跳过；
+如果所选作品全部没有地址，启动下载时才会报错。已有地址但下载中失效的作品会计为失败。
+所选文件夹下按 `作者昵称_作者抖音号` 建目录；缺少抖音号时只用昵称，作者资料都缺失时用“未知作者”。
+同名视频会自动加序号，避免覆盖已有文件。
 
-抖音 Web 端 Cookie 有效期通常约 **7~30 天**，失效后抓取会返回 0 条数据。重新扫码登录即可恢复：
+**每次重新开始作者提取会清空上一次作者作品结果及关联快照、评论、转录，但保留已添加的作者资料。**
+重新开始话题或单作品提取也会分别清空该类型的旧结果。**要保留完整历史，先退出程序并备份整个
+`%LOCALAPPDATA%\抖音作品提取\` 数据目录。** XLSX/CSV 只保留导出表格中的字段，不能还原全部快照、评论和转录。
+界面的“清空主页列表”是另一项操作，会删除作者列表和关联结果。源码虽保留清理本程序浏览器缓存的设置页路由，
+当前桌面主导航没有该入口；排查登录异常时先保存数据并联系维护者，不要直接删除登录会话。
 
-```bash
-python monitor.py login
-```
+## 数据位置与更新
 
-登录完成后可用以下命令验证：
+作者资料、提取结果、配置和抖音登录会话保存在当前 Windows 用户的
+`%LOCALAPPDATA%\抖音作品提取\`，包括 `data\douyin_monitor.db`、`config.yaml`、
+`douyin_session\` 和 `desktop.log`。它们不在 ZIP 的 `app/` 中。
+要备份或搬迁，先正常退出程序，再复制整个数据目录；不要公开上传数据库、日志或登录会话。
+视频下载位置由每次下载时选择，XLSX 保存位置由导出时选择。
 
-```bash
-# 空跑一个已知博主，看是否有数据
-python monitor.py run --creator 1
-```
+以后仍从安装目录的 `Start-App.cmd` 启动。启动器查询国内更新清单，发现新版本会提示，
+下载并核对 SHA-256 后替换 `app/`；如果网络暂时不可用，现有版本仍会尝试启动。
+遇到更新问题查看安装目录的 `Update-App.log`，不要先删除用户数据。
 
-## 快速开始
+## 常见问题
 
-### 1. 安装依赖
+| 现象 | 先检查什么 |
+| --- | --- |
+| 双击后提示程序文件不完整 | 是否解压了完整包并保留 `app/`；是否误用了源码目录或只复制 EXE。 |
+| 窗口启动失败、出现 .NET 提示 | 安装/修复 .NET Framework 4.8.1；看 `%LOCALAPPDATA%\抖音作品提取\desktop.log`。 |
+| 作者或作品读取不到、结果为零 | 检查链接是否有效、抖音登录/验证是否完成、日期筛选是否过窄；抖音风控或接口变化也会影响结果。 |
+| 暂停后暂时仍有请求 | 等待正在进行的请求结束；只有到达检查点才真正停下。 |
+| 视频下载失败 | 全部所选作品无地址时会报错，部分无地址时会被跳过；有地址但下载失败可重新提取后再试，并查看界面状态。 |
+| XLSX 保存窗口未出现 | 确认运行的是桌面完整包且本机有可用的窗口会话；查看 `desktop.log`。 |
+| 更新失败但旧版本能打开 | 查看 `Update-App.log`、网络连接和安装目录写入权限；不要手动清理 `%LOCALAPPDATA%`。 |
 
-```bash
-pip install -r requirements.txt
+联系维护者排查时提供版本、操作步骤、报错文字和必要的**脱敏**日志；不要提供密码、Cookie、登录会话、数据库或含个人资料的原始导出。
 
-# 安装 Playwright 浏览器（Chromium）
-python -m playwright install chromium
-```
+## 开发者入口
 
-### 2. 扫码登录（只需一次）
+源码主要入口为 `desktop_app.py`，Web/API 在 `web/app.py`，作者/话题/单作品采集分别在
+`spider.py`、`topic_spider.py`、`single_video_spider.py`，SQLite 表及迁移在 `db.py`。
+开发环境建议 Windows + Python 3.10；安装 `requirements.txt`、PyInstaller 和 Playwright Chromium。
+完整命令、配置模板、构建/发布边界、已知限制见 [HANDOFF.md](HANDOFF.md)。
 
-```bash
-python monitor.py login
-```
-
-弹出浏览器窗口，扫码登录抖音。会话保存在 `douyin_session/` 目录，后续无需重复登录。
-
-### 3. 添加博主
-
-```bash
-# 方式一：sec_uid
-python monitor.py add MS4wLjABAAAAdu8I0mIDajXSXZZvtY79MXGRL83G5FvMlH1hxcIteEx
-
-# 方式二：主页链接
-python monitor.py add "https://www.douyin.com/user/MS4wLjAB..."
-
-# 方式三：分享短链
-python monitor.py add "https://v.douyin.com/xxxxx/"
-
-# 方式四：分享文案（自动提取链接）
-python monitor.py add "长按复制此条消息，打开抖音搜索... https://v.douyin.com/xxxxx/"
-
-# 指定名称
-python monitor.py add <url> --name 野山坡
-```
-
-### 4. 抓取数据
-
-```bash
-# 抓取所有启用的博主
-python monitor.py run
-
-# 抓取指定博主
-python monitor.py run --creator 1
-```
-
-### 5. 查看报告
-
-```bash
-# 所有博主汇总
-python monitor.py report
-
-# 指定博主
-python monitor.py report --creator 1
-```
-
-### 6. 启动 Web 面板
-
-```bash
-python monitor.py web --port 8080
-```
-
-访问 `http://127.0.0.1:8080`
-
-页面功能：
-- **概览** — 各博主视频数、总时长、最高点赞、最近更新
-- **博主管理** — 添加/双击改名/删除/单独抓取
-- **视频列表** — 筛选博主/标题搜索/多维度排序/分页浏览
-- **视频详情** — 快照历史、评论抓取与展示、语音转录
-- **趋势图** — 点赞数变化折线图 (Chart.js)
-- **系统配置** — 采集/评论/转录/调度/Web 参数，Web 页面直接修改
-
-### 7. 定时调度
-
-```bash
-python monitor.py schedule
-```
-
-默认每 4 小时 (±15 分钟随机抖动) 自动抓取一轮。配置在 `config.yaml` 中调整。
-
-### 8. 抓取评论区
-
-```bash
-# 抓取指定博主的评论区（最近 50 个视频，各最多 3 页）
-python monitor.py comments --creator 1 --video-limit 50 --pages 3
-
-# 抓取所有启用博主的评论
-python monitor.py comments --video-limit 30 --pages 3 --comment-limit 30
-```
-
-| 参数 | 默认 | 说明 |
-|------|------|------|
-| `--creator` | 全部 | 指定博主 ID 或名称 |
-| `--video-limit` | 50 | 最多检查多少个视频 |
-| `--pages` | 3 | 每个视频最多翻几页评论 |
-| `--comment-limit` | 30 | 每个视频累计拉取多少条 |
-
-页面操作：进入任意视频详情页，切换到 **💬 评论** 标签，点击「获取评论」按钮即可。
-
-> 抓取原理：Playwright 导航到视频详情页，拦截页面自动发出的 `/aweme/v1/web/comment/list/` API，再用 `page.evaluate(fetch())` 翻页。自动过滤点赞 ≤0 或无回复的评论。
-
-### 9. 语音转录
-
-```bash
-# 转录所有待处理的视频
-python monitor.py transcribe
-
-# 转录指定博主、限制条数、指定并行数
-python monitor.py transcribe --creator 1 --limit 20 --workers 2
-```
-
-转录依赖 `faster-whisper` 和系统 `ffmpeg`。首次运行会自动下载模型（约 3GB）。
-
-> 注意：转录需要获取视频的 m3u8 流地址，部分视频可能因签名校验失败。此时需先登录浏览器，再运行 `python monitor.py export-cookies` 导出 cookies 供转录模块使用。
-
-### 10. 导出 CSV
-
-```bash
-# 导出所有博主
-python monitor.py export
-
-# 导出指定博主
-python monitor.py export --creator 1
-```
-
-文件生成在 `exports/` 目录。
-
-## 命令行参考
-
-```
-python monitor.py add <url或sec_uid> [--name <名称>]     添加博主
-python monitor.py remove <ID或名称或sec_uid>              删除博主
-python monitor.py list                                     列出所有博主
-python monitor.py run [--creator <id>]                     运行抓取
-python monitor.py report [--creator <id>]                  查看报告
-python monitor.py schedule                                 启动定时调度
-python monitor.py login                                    扫码登录
-python monitor.py login --slot 1                           多槽位登录
-python monitor.py export-cookies                           导出浏览器 cookies
-python monitor.py comments [--creator <id>]                抓取评论区
-                [--video-limit N] [--pages N]
-                [--comment-limit N]
-python monitor.py transcribe [--creator <id>] [--limit N]  转录视频语音
-python monitor.py export [--creator <id>]                  导出 CSV
-python monitor.py web [--port <port>]                      启动 Web 面板
-```
-
-## 配置 (config.yaml)
-
-```yaml
-# 博主列表（也可通过 CLI / Web 面板管理）
-creators:
-  - name: "野山坡"
-    sec_uid: "MS4wLjABAAAA..."
-    platform: "douyin"
-    enabled: true
-
-# 调度
-schedule:
-  interval_minutes: 240      # 抓取间隔
-  jitter_minutes: 15         # 随机抖动（反爬）
-  daily_at: null             # 或设为 "03:00" 每天定时执行
-
-# 采集参数
-spider:
-  max_scrolls: 80            # 最大滚动次数
-  headless: true             # 无头模式
-  page_load_wait: 8          # 首页加载等待 (秒)
-  scroll_idle_limit: 20      # 连续无新数据的滚动上限
-  viewport_width: 1920       # 浏览器窗口宽度
-  viewport_height: 1080      # 浏览器窗口高度
-
-# 评论抓取
-comments:
-  video_limit: 50            # 每批最多检查多少个视频
-  pages: 3                   # 每个视频最多翻几页
-  comment_limit: 30          # 每个视频累计拉取多少条
-  page_count: 20             # 每页拉取数
-  inter_video_delay_min: 3   # 视频间最小延迟（秒）
-  inter_video_delay_max: 6   # 视频间最大延迟（秒）
-  filter_digg_min: 1         # 最低点赞数（≤此值丢弃）
-  filter_reply_min: 1        # 最低回复数（≤此值丢弃）
-
-# 语音转录
-transcriber:
-  model: small               # Whisper 模型: tiny/small/medium/large-v3
-  device: cpu                # 设备: cpu/cuda
-  language: zh               # 语言: zh/en/auto
-  beam_size: 5               # Beam Search 宽度
-
-# Web 面板
-web:
-  host: "127.0.0.1"          # 监听地址
-  port: 8080                 # 端口
-  videos_per_page: 20        # 视频列表每页数量
-  fresh_threshold_hours: 6   # 新鲜数据阈值
-  stale_threshold_days: 1    # 陈旧数据阈值
-
-# 输出
-output:
-  export_dir: "./exports"
-  auto_export_csv: true      # 每次 run 后自动导出
-```
-
-> 所有配置也可通过 Web 面板 `/settings` 页面直接修改，自动保存到 config.yaml。首次运行自动使用默认值。
-
-## Windows 注意事项
-
-本项目通过 `WindowsProactorEventLoop` 隔离 Playwright 浏览器进程，避免与 Uvicorn 的事件循环冲突。无需额外配置。
-
-## License
-
-MIT
+项目保留了早期 `monitor.py`/`commands.py` CLI 和部分监控页面；它们不是当前桌面版安装入口。
+本项目仅处理你有权访问的公开内容，提取结果受抖音页面、登录态和平台规则影响。

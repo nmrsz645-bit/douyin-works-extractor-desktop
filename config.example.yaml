@@ -1,30 +1,50 @@
-# 抖音博主监控配置 - 示例模板
-# 复制此文件为 config.yaml 并按需修改
-creators:
-  - name: "示例博主"
-    sec_uid: "你的_sec_uid_在这里"
-    platform: "douyin"
-    enabled: true
+# 抖音作品提取 v1.1.22 的无凭证配置示例。
+# 桌面版首次运行会使用 config_manager.py 的默认值；无需复制本文件。
+# 如需自定义，关闭程序后复制为 %LOCALAPPDATA%\抖音作品提取\config.yaml。
+# /settings 路由仍在，但当前桌面主导航没有设置页入口。
+# 不要把真实 config.yaml、Cookie 或登录会话提交到仓库。
 
-# 调度配置
-schedule:
-  interval_minutes: 240        # 每 4 小时跑一轮
-  jitter_minutes: 15           # 随机延迟 ±15 分钟
+# 旧 monitor.py CLI 可选；桌面版作者列表通过界面添加并保存在 SQLite。
+# 作者主页链接可从抖音公开作者页复制，程序在界面中解析 sec_uid。
+creators: []
 
-# 采集参数
 spider:
-  max_scrolls: 80
-  headless: true
-  page_load_wait: 8
-  scroll_idle_limit: 20
+  max_scrolls: 80            # 当前桌面作者/话题提取均在代码中固定为 80
+  headless: true               # 桌面作者提取会强制使用可见浏览器
+  page_load_wait: 8          # 当前桌面作者提取在代码中固定为 0
+  scroll_idle_limit: 20      # 当前桌面作者固定为 20、话题固定为 10
+  viewport_width: 1920
+  viewport_height: 1080
 
-# 转录配置
+comments:
+  video_limit: 50
+  pages: 3
+  comment_limit: 30
+  page_count: 20
+  inter_video_delay_min: 3
+  inter_video_delay_max: 6
+  filter_digg_min: 1
+  filter_reply_min: 1
+
 transcriber:
-  model: "small"
-  device: "cpu"
-  cookie_import_path: ""
+  model: small
+  device: cpu
+  language: zh
+  beam_size: 5
+  cookie_import_path: ""     # 旧 CLI 转录流程可选；不得指向仓库内的真实 Cookie 文件
 
-# 输出配置
+schedule:
+  daily_at: "06:00"
+  interval_minutes: 240
+  jitter_minutes: 15
+
 output:
-  export_dir: "./exports"
+  export_dir: "./exports"     # 旧 CLI 默认导出目录；桌面 XLSX 由用户选择位置
   auto_export_csv: true
+
+web:
+  host: "127.0.0.1"          # 旧 Web/CLI；桌面入口固定本地地址并自动选空闲端口
+  port: 8080
+  videos_per_page: 20
+  fresh_threshold_hours: 6
+  stale_threshold_days: 1
