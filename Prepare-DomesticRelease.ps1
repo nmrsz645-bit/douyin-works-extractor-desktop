@@ -108,7 +108,9 @@ $manifestPath = Join-Path $updatesDirectory 'latest.json'
 # Windows PowerShell 5.1 does not support Set-Content -Encoding utf8NoBOM.
 # Write UTF-8 without BOM through .NET so local and GitHub Actions builds match.
 $utf8NoBom = New-Object Text.UTF8Encoding($false)
-[IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Compress), $utf8NoBom)
+$optInDirectory = Join-Path $updatesDirectory 'opt-in'
+New-Item -ItemType Directory -Force -Path $optInDirectory | Out-Null
+[IO.File]::WriteAllText((Join-Path $optInDirectory 'latest.json'), ($manifest | ConvertTo-Json -Compress), $utf8NoBom)
 
 # A script tag can read this cross-origin file without a browser CORS rule.
 # The download page uses it to display the same version and complete-package
@@ -126,6 +128,5 @@ $websiteManifestPath = Join-Path $updatesDirectory 'latest.js'
 )
 
 Write-Output "Release upload folder prepared: $outputDirectory"
-Write-Output "Upload the contents of $updatesDirectory to OSS path updates/."
-Write-Output "Publish latest.json and latest.js last, after both ZIP files have uploaded successfully."
+Write-Output "Upload immutable ZIP files to OSS path updates/, then publish opt-in/latest.json and latest.js."
 Write-Output "Version: v$normalizedVersion"

@@ -43,7 +43,7 @@ def object_key_from_url(url: str, bucket: str, prefix: str) -> str:
 
 
 def read_release(directory: Path, bucket: str, prefix: str) -> tuple[dict, Path, Path, Path, Path, str, str]:
-    manifest_path = require_file(directory / "latest.json")
+    manifest_path = require_file(directory / "opt-in" / "latest.json")
     latest_js_path = require_file(directory / "latest.js")
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     required = ("version", "url", "sha256", "fullPackageUrl", "fullPackageSha256", "fullPackageName")
@@ -113,7 +113,7 @@ def main() -> int:
     )
     print(f"Validated release v{manifest['version']}")
     print(f"ZIP upload order: {full_key}, {update_key}")
-    print("Manifest upload order: updates/latest.json, updates/latest.js")
+    print("Manifest upload order: updates/opt-in/latest.json, updates/latest.js")
     if args.dry_run:
         return 0
 
@@ -122,7 +122,7 @@ def main() -> int:
     # matching remote size.
     upload_and_verify(bucket, full, full_key)
     upload_and_verify(bucket, update, update_key)
-    upload_and_verify(bucket, latest_json, f"{prefix}latest.json", manifest=True)
+    upload_and_verify(bucket, latest_json, f"{prefix}opt-in/latest.json", manifest=True)
     upload_and_verify(bucket, latest_js, f"{prefix}latest.js", manifest=True)
     print(f"Published release v{manifest['version']}")
     return 0

@@ -40,6 +40,8 @@ jobs:
           Set-Content -LiteralPath "$root/app/version.json" -Value ('{"version":"' + $version + '"}') -Encoding utf8
           Copy-Item Start-App.cmd "$root/Start-App.cmd" -Force
           Copy-Item Update-App.ps1 "$root/Update-App.ps1" -Force
+          New-Item -ItemType Directory -Path "$root/scripts" -Force | Out-Null
+          Copy-Item scripts/Update-Core.psm1 "$root/scripts/Update-Core.psm1" -Force
           Compress-Archive -LiteralPath "$root/app" -DestinationPath "release/app.zip" -Force
           Compress-Archive -LiteralPath $root -DestinationPath "$root.zip" -Force
       - name: Arrange OSS upload files

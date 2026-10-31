@@ -2,7 +2,7 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$Root,
     # Alibaba Cloud OSS is the only production update endpoint.
-    [string]$ManifestUrl = "https://luotuoqiluotuozhaoma-download.oss-cn-beijing.aliyuncs.com/updates/latest.json"
+    [string]$ManifestUrl = "https://luotuoqiluotuozhaoma-download.oss-cn-beijing.aliyuncs.com/updates/douyin-works-extractor/opt-in/latest.json"
 )
 
 $ErrorActionPreference = "Stop"
@@ -10,6 +10,7 @@ $Root = $Root.Trim().Trim('"')
 if ([string]::IsNullOrWhiteSpace($Root)) { throw "Update root folder is empty" }
 $Root = [IO.Path]::GetFullPath($Root)
 $AppDir = Join-Path $Root "app"
+Import-Module (Join-Path $PSScriptRoot 'scripts\Update-Core.psm1') -Force
 
 # Some Windows PowerShell installations negotiate legacy TLS by default.
 # GitHub requires modern TLS for its release endpoints.
@@ -102,14 +103,14 @@ function Confirm-Update([version]$CurrentVersion, [version]$NewVersion) {
             $message,
             "Douyin Works Extractor - Update Available",
             [System.Windows.MessageBoxButton]::YesNo,
-            [System.Windows.MessageBoxImage]::Information
+            [System.Windows.MessageBoxImage]::Information,
+            [System.Windows.MessageBoxResult]::No
         )
         return $result -eq [System.Windows.MessageBoxResult]::Yes
     }
     catch {
-        # A desktop Windows release normally has PresentationFramework. If it is
-        # unavailable, retain automatic update behavior instead of blocking launch.
-        return $true
+        # Without a UI, the user cannot opt in. Keep the installed version running.
+        return $false
     }
 }
 
@@ -136,6 +137,11 @@ function Expand-UpdatePackage([string]$ArchivePath, [string]$Destination) {
 }
 
 try {
+    try {
+        if (Install-PendingUpdate -Root $Root) { Write-Output 'Installed the previously approved update.' }
+    } catch {
+        Write-Error "Pending update was not installed; keeping the previous application: $($_.Exception.Message)"
+    }
     $localVersion = Get-AppVersion (Join-Path $AppDir "version.json")
     $manifest = Get-LatestManifest -PrimaryUrl $ManifestUrl
     $remoteVersion = [version]([string]$manifest.version).TrimStart("v")
@@ -153,28 +159,15 @@ try {
     # work path short so older Windows PowerShell can extract it reliably.
     $workRoot = Join-Path ([IO.Path]::GetTempPath()) ("dwe-" + [guid]::NewGuid().ToString("N"))
     $staging = Join-Path $workRoot "s"
-    $backup = Join-Path $workRoot "b"
     Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Path $workRoot -Force | Out-Null
     Download-UpdatePackage -Url $manifest.url -Destination $zip
     $actualHash = Get-Sha256 $zip
     if ($actualHash -ne ([string]$manifest.sha256).ToLowerInvariant()) { throw "Update package verification failed" }
-    Expand-UpdatePackage -ArchivePath $zip -Destination $staging
-    $newApp = Join-Path $staging "app"
-    if (-not (Test-Path -LiteralPath $newApp)) { throw "Invalid update package structure" }
-    Move-UpdateDirectory -Source $AppDir -Destination $backup
-    try {
-        Move-UpdateDirectory -Source $newApp -Destination $AppDir
-        Remove-Item -LiteralPath $backup -Recurse -Force -ErrorAction SilentlyContinue
-    } catch {
-        if (-not (Test-Path -LiteralPath $AppDir) -and (Test-Path -LiteralPath $backup)) {
-            Move-UpdateDirectory -Source $backup -Destination $AppDir
-        }
-        throw
-    }
+    Queue-VerifiedUpdate -Root $Root -ArchivePath $zip -ExpectedVersion ([string]$manifest.version) -ExpectedSha256 ([string]$manifest.sha256)
     Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $workRoot -Recurse -Force -ErrorAction SilentlyContinue
-    Write-Output "Updated application from $localVersion to $remoteVersion."
+    Write-Output "Update v$remoteVersion downloaded and verified. It will be installed the next time the application starts."
 } catch {
     # The CMD launcher starts the installed application after this script exits.
     # Keep an actionable record instead of silently hiding update failures.
