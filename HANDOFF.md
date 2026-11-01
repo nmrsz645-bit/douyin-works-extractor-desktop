@@ -1,9 +1,12 @@
 # 抖音作品提取：开发与发布交接
 
-本文件对应 **v1.1.22**。该版 Release 标签 `v1.1.22` 指向源码提交
+本文件的接手入口为 [00-READ-FIRST.md](00-READ-FIRST.md)。截至 2026-11-01，正式 Latest 为 **v1.1.22**；
+该版 Release 标签 `v1.1.22` 指向源码提交
 `f56424a9434bb3ee305d4e05fac36c46c81b453b`；后续文档提交不会移动旧标签或替换旧安装包。
 接手时先检查 `version.json`、远端 `main`、最新 Release 和公开更新清单，不能仅凭本文件判断未来的最新版。
 新 Windows 电脑克隆、测试、组包、GitHub/OSS/下载站步骤以 [发布指南](docs/RELEASE-GUIDE.md) 为准；本文件负责架构与修改入口。
+`backup-handoff-1.1.22-20261031` 是备份用预发布，`backup/existing-safe-20261031` 是旧 opt-in 更新器实验分支；
+两者均未进入正式客户端更新流程。备份分支内的同版 `version.json` 不代表正式发布内容。
 
 ## 用途与运行架构
 
@@ -112,7 +115,9 @@ $env:LOCALAPPDATA = Join-Path $env:TEMP 'dwe-dev-profile'
 4. 此工作流**不会创建 GitHub Release 或上传其附件**；需另行创建 Release、上传完整包和更新包，并核对 GitHub 附件的大小及 SHA-256。保留已有版本资产不覆盖。OSS 必须先上传不可变 ZIP，再更新 `latest.json`、`latest.js`；公开校验值要与文件一致。
 5. 在独立旧版安装目录验证“启动器提示 → 下载 → 校验 → 替换 `app/` → 启动”，并确认 `%LOCALAPPDATA%` 数据未变化。
 
-**后续仅在本机独立目录重建了候选包；不移动 `v1.1.22` 标签、不替换正式 ZIP、不修改 OSS 或下载站。**
+**后续在本机独立目录重建候选包，并将剔除浏览器 `debug.log` 的安全副本放入
+[备份预发布](https://github.com/nmrsz645-bit/douyin-works-extractor-desktop/releases/tag/backup-handoff-1.1.22-20261031)；
+未移动 `v1.1.22` 标签、替换正式 ZIP、修改 OSS 或下载站。**
 v1.1.22 GitHub 完整包 SHA-256：
 `f478f4087b94eedd8bf2f2f28c01b4718aff03be500da63c842bd7535a6ed190`；
 更新包 SHA-256：`aa1b80c3ea0db23b5ebbc0e8f18912070473224f7fc0d4c5b9e7935a7bf7382f`。

@@ -1,11 +1,12 @@
 # 抖音作品提取（Windows 桌面版）
 
-当前稳定版：**v1.1.22**。程序可从作者主页、话题和单个作品链接提取公开可见的作品资料，
+截至 2026-11-01 核对的稳定版：**v1.1.22**。程序可从作者主页、话题和单个作品链接提取公开可见的作品资料，
 导出 XLSX，并将可访问的视频保存到按作者归档的目录。界面在 Windows 原生窗口中打开；
 程序只在本机 `127.0.0.1` 启动一个随机端口的服务。
 
 | 入口 | 链接 |
 | --- | --- |
+| 新电脑 Codex 接手入口 | [00-READ-FIRST.md](00-READ-FIRST.md) |
 | 完整版（新用户下载） | [v1.1.22 Windows x64 ZIP](https://github.com/nmrsz645-bit/douyin-works-extractor-desktop/releases/download/v1.1.22/douyin-works-extractor-1.1.22-windows-x64.zip) |
 | 发布说明与历史版本 | [GitHub Releases](https://github.com/nmrsz645-bit/douyin-works-extractor-desktop/releases) |
 | 开发与发布交接 | [HANDOFF.md](HANDOFF.md) |
@@ -14,6 +15,8 @@
 该完整包 SHA-256：`f478f4087b94eedd8bf2f2f28c01b4718aff03be500da63c842bd7535a6ed190`。
 PowerShell 可用 `Get-FileHash .\douyin-works-extractor-1.1.22-windows-x64.zip -Algorithm SHA256` 核对。
 此哈希对应已发布的 v1.1.22 原包；不要把源码目录的旧 `dist/` 当成最新版。
+仓库另有 `backup-handoff-1.1.22-20261031` **备份预发布**，其中候选包并非正式安装或更新包；
+新用户仍以上述 v1.1.22 正式完整包为准。
 
 ## 安装与首次配置
 

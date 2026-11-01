@@ -1,16 +1,17 @@
 # 抖音作品提取：新 Windows 电脑接手与发布指南
 
 本指南针对仓库 [`nmrsz645-bit/douyin-works-extractor-desktop`](https://github.com/nmrsz645-bit/douyin-works-extractor-desktop)。
-截至 2026-10-31，正式版为 **v1.1.22**；`main` 是后续维护源码，`v1.1.22` 标签指向
+截至 2026-11-01，正式版为 **v1.1.22**；`main` 是后续维护源码，`v1.1.22` 标签指向
 `f56424a9434bb3ee305d4e05fac36c46c81b453b`。标签后的文档提交不会改变既有安装包。
-先读 [README](../README.md) 的用户操作和 [HANDOFF](../HANDOFF.md) 的模块/已知问题，再执行本指南。
+新电脑 Codex 先从 [00-READ-FIRST](../00-READ-FIRST.md) 进入，再读 [README](../README.md) 的用户操作和
+[HANDOFF](../HANDOFF.md) 的模块/已知问题，然后执行本指南。
 跨项目下载站的公共边界见[网站](https://github.com/nmrsz645-bit/software-download-center/blob/docs-cross-pc-handoff/docs/PUBLISHING.md#website)、
 [卡片与 catalog](https://github.com/nmrsz645-bit/software-download-center/blob/docs-cross-pc-handoff/docs/PUBLISHING.md#catalog)、
 [客户端更新](https://github.com/nmrsz645-bit/software-download-center/blob/docs-cross-pc-handoff/docs/PUBLISHING.md#client-update)、
 [验收与回滚](https://github.com/nmrsz645-bit/software-download-center/blob/docs-cross-pc-handoff/docs/PUBLISHING.md#verify-rollback)和
 [凭证](https://github.com/nmrsz645-bit/software-download-center/blob/docs-cross-pc-handoff/docs/PUBLISHING.md#credentials)。本项目的对象、命令和限制以下文为准。
 
-> 本文件是**未来发布操作手册**。本机仅建立了与已发布版本不同字节的隔离候选；没有构建新版本、推送标签、创建 Release、上传 OSS、改下载站或执行生产上传命令。`git push` 文档提交不等于客户端已更新。
+> 本文件是**未来发布操作手册**。隔离候选的安全副本已存入非 `v*` 的备份预发布；没有构建新的正式版本、替换正式 Release、上传 OSS、改下载站或执行生产上传命令。`git push` 文档提交和备份预发布都不等于客户端已更新。
 
 ## 1. 仓库、正式版和测试版
 
@@ -133,7 +134,7 @@ Get-FileHash "$stage\updates\douyin-works-extractor-update-$version.zip" -Algori
 `--dry-run` 只校验待上传文件与清单，不触网写 OSS。必须另外检查 ZIP 内是否有 `.env`、Cookie、
 浏览器资料、数据库、日志、个人资料或真实配置，并在独立用户数据目录做启动检查。
 
-### 2026-10-31 本机隔离完整候选（未发布）
+### 2026-10-31 本机隔离完整候选（原件未发布）
 
 Playwright 1.63.0 的 `browsers.json` 要求 Chromium `1243`、headless shell `1243`、ffmpeg `1011`。
 本机标准 `%LOCALAPPDATA%\ms-playwright` 缓存有这三个目录及安装完成标记；三个核心 EXE 的 SHA-256
@@ -156,9 +157,22 @@ ZIP CRC、排除用户资料路径。运行真实 `Prepare-DomesticRelease.ps1` 
 **这些候选与 v1.1.22 已发布 ZIP 的字节和 SHA-256 均不同，绝不能作为同版本资产上传或覆盖 OSS。**
 这次检查没有真实抖音提取、语音模型/转录、旧版升级、另一台电脑或正式用户数据验收。
 
+原候选 ZIP 各含一个浏览器 `debug.log`，不得原样公开。仅剔除该日志、其余条目大小及 CRC 保持一致的
+安全副本已上传到[备份预发布](https://github.com/nmrsz645-bit/douyin-works-extractor-desktop/releases/tag/backup-handoff-1.1.22-20261031)，
+作为另一台电脑的恢复资料：完整备份 ZIP SHA-256 为
+`882b07792e3a3da70dbab875863134c49444f6860b7e6b1f048d4a705980c16c`，更新备份 ZIP 为
+`e5f75dea1d6ed32cd28b3c9995903eb7690c275531fcb864997e3fe9188b1272`。
+GitHub 附件 digest 与这两个哈希一致；详细文件名、大小、原候选哈希见该预发布的 `BACKUP-MANIFEST.json`。
+**这些附件不是正式 v1.1.22，也不得拿来替换客户端更新 ZIP 或补发给用户。**
+
 ## 4. GitHub Release、OSS 和客户端更新
 
 现有 v1.1.22 对象（用于核对路径模式，**不能覆盖这些旧对象**）：
+
+[备份预发布](https://github.com/nmrsz645-bit/douyin-works-extractor-desktop/releases/tag/backup-handoff-1.1.22-20261031)
+是 `prerelease=true`、`latest=false` 的审阅资料；
+[`backup/existing-safe-20261031`](https://github.com/nmrsz645-bit/douyin-works-extractor-desktop/tree/backup/existing-safe-20261031)
+是未合入的旧 opt-in 更新器实验。它们与正式发布流程分开，不能当作新电脑给用户安装的最新版。
 
 | 对象 | 实际位置/字段 |
 | --- | --- |
@@ -202,7 +216,7 @@ Pages 当前从其 `main` 根目录发布 `index.html`；本项目仓库不托�
 新电脑如需只读核对网站，可 `git clone https://github.com/nmrsz645-bit/software-download-center.git` 后
 `git switch main` 查看 `index.html`；不要从本项目会话推送该仓库。
 在其 `index.html` 中，本产品卡片的版本节点 ID 是 **`douyin-version`**，下载按钮 ID 是 **`douyin-download`**。
-静态兜底当前仍写 v1.1.10 和旧完整包 URL；页面运行时加载本产品 OSS `updates/latest.js`，
+2026-10-31 核对时，静态兜底仍写 v1.1.10 和旧完整包 URL；页面运行时加载本产品 OSS `updates/latest.js`，
 读取 `window.DOUYIN_WORKS_EXTRACTOR_LATEST.version`、`.fullPackageUrl`，只接受 2 至 4 段数字的版本和 HTTPS URL，
 再改写这两个节点。因此网页显示 v1.1.22 依赖运行时脚本成功；脚本失败会退回旧静态内容。
 
